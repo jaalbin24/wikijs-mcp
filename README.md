@@ -14,6 +14,7 @@ An MCP server that connects Claude to your [Wiki.js](https://js.wiki/) instance.
 
 ```bash
 claude mcp add wikijs \
+  --scope user \
   -e WIKIJS_URL=https://your-wiki.com \
   -e WIKIJS_API_KEY=your-api-key \
   -- pipx run wikijs-mcp
