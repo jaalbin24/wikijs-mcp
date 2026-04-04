@@ -1,6 +1,7 @@
 """Wiki.js GraphQL API client."""
 
 import logging
+import ssl
 from typing import Any
 
 import httpx
@@ -15,7 +16,9 @@ class WikiJSClient:
 
     def __init__(self, config: WikiJSConfig):
         self.config = config
-        self.client = httpx.AsyncClient(timeout=30.0)
+        self.client = httpx.AsyncClient(
+            timeout=30.0, verify=ssl.create_default_context()
+        )
 
     async def __aenter__(self):
         return self
