@@ -71,6 +71,9 @@ jobs:
         with:
           version: 1.7.1
 
+      - name: Set version from tag
+        run: poetry version "${GITHUB_REF_NAME#v}"
+
       - name: Build package
         run: poetry build
 
