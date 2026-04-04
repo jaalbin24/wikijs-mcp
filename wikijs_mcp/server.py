@@ -291,40 +291,12 @@ class WikiJSMCPServer:
 
                 return response
 
-    def get_streamable_http_app(self):
-        """Get the FastMCP StreamableHTTP app for HTTP transport."""
-        return self.app.streamable_http_app()
-
     async def run_stdio(self):
-        """Run the MCP server over stdio (for local use)."""
+        """Run the MCP server over stdio."""
         try:
             self.config.validate_config()
-            logger.info(f"Starting WikiJS MCP Server (stdio) for {self.config.url}")
+            logger.info(f"Starting WikiJS MCP Server for {self.config.url}")
             await self.app.run_stdio_async()
-        except Exception as e:
-            logger.error(f"Server failed to start: {str(e)}")
-            raise
-
-    async def run_http(self, host: str = None, port: int = None):
-        """Run the MCP server over HTTP transport."""
-        try:
-            self.config.validate_config()
-
-            # Use config values if not provided
-            host = host or self.config.http_host
-            port = port or self.config.http_port
-
-            logger.info(f"Starting WikiJS MCP Server (HTTP) for {self.config.url}")
-            logger.info(f"Server running on http://{host}:{port}")
-
-            # Get the StreamableHTTP app and run it with uvicorn
-            import uvicorn
-
-            app = self.get_streamable_http_app()
-
-            config = uvicorn.Config(app=app, host=host, port=port, log_level="info")
-            server = uvicorn.Server(config)
-            await server.serve()
         except Exception as e:
             logger.error(f"Server failed to start: {str(e)}")
             raise
@@ -332,45 +304,22 @@ class WikiJSMCPServer:
 
 async def main():
     """Main entry point."""
-    import os
     import sys
 
     logging.basicConfig(level=logging.INFO)
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--help":
+        print("WikiJS MCP Server")
+        print("Usage:")
+        print("  python -m wikijs_mcp.server")
+        print("  python -m wikijs_mcp.server --help")
+        print("")
+        print("Runs the MCP server over stdio for use with Claude Code")
+        print("and other MCP clients.")
+        return
+
     server = WikiJSMCPServer()
-
-    # Check if we should run over HTTP or stdio
-    transport = os.getenv("MCP_TRANSPORT", "http").lower()
-
-    # Allow command line override
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "--stdio":
-            transport = "stdio"
-        elif sys.argv[1] == "--http":
-            transport = "http"
-        elif sys.argv[1] == "--help":
-            print("WikiJS MCP Server")
-            print("Usage:")
-            print("  python -m wikijs_mcp.server [--stdio|--http]")
-            print("  python -m wikijs_mcp.server --help")
-            print("")
-            print("Environment variables:")
-            print("  MCP_TRANSPORT=stdio|http  (default: http)")
-            print("")
-            print("For Claude Code:")
-            print("  - Use --http or MCP_TRANSPORT=http")
-            print("  - Server will run on http://localhost:8000/mcp")
-            print("  - Configure Claude Code to connect to HTTP MCP server")
-            return
-
-    if transport == "stdio":
-        # Run over stdio (for legacy MCP client compatibility)
-        print("Starting MCP server over stdio...")
-        await server.run_stdio()
-    else:
-        # Run over HTTP (default, for Claude Code and network access)
-        print("Starting MCP server over HTTP...")
-        print("Claude Code can connect to: http://localhost:8000/mcp")
-        await server.run_http()
+    await server.run_stdio()
 
 
 if __name__ == "__main__":

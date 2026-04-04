@@ -56,17 +56,6 @@ class TestWikiJSMCPServer:
         assert set(tool_names) == set(expected_names)
 
     @patch("wikijs_mcp.server.WikiJSConfig.load_config")
-    def test_get_streamable_http_app(self, mock_load_config, mock_wiki_config):
-        """Test getting StreamableHTTP app for HTTP transport."""
-        mock_load_config.return_value = mock_wiki_config
-        server = WikiJSMCPServer()
-
-        app = server.get_streamable_http_app()
-        assert app is not None
-        # The app should be a Starlette/FastAPI app
-        assert hasattr(app, "routes")
-
-    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
     @patch("wikijs_mcp.server.WikiJSClient")
     async def test_call_tool_search_success(
         self, mock_client_class, mock_load_config, mock_wiki_config
@@ -856,69 +845,6 @@ class TestWikiJSMCPServer:
         with pytest.raises(ValueError, match="Invalid config"):
             await server.run_stdio()
 
-    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
-    @patch("uvicorn.Config")
-    @patch("uvicorn.Server")
-    @patch("wikijs_mcp.config.WikiJSConfig.validate_config")
-    async def test_run_http(
-        self,
-        mock_validate,
-        mock_server_class,
-        mock_config_class,
-        mock_load_config,
-        mock_wiki_config,
-    ):
-        """Test run_http method."""
-        mock_load_config.return_value = mock_wiki_config
-        mock_wiki_config.http_host = "localhost"
-        mock_wiki_config.http_port = 8000
-
-        mock_server = AsyncMock()
-        mock_server_class.return_value = mock_server
-
-        server = WikiJSMCPServer()
-
-        await server.run_http()
-
-        mock_validate.assert_called_once()
-        mock_config_class.assert_called_once()
-        mock_server_class.assert_called_once()
-        mock_server.serve.assert_called_once()
-
-    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
-    @patch("uvicorn.Config")
-    @patch("uvicorn.Server")
-    async def test_run_http_with_custom_host_port(
-        self, mock_server_class, mock_config_class, mock_load_config, mock_wiki_config
-    ):
-        """Test run_http method with custom host and port."""
-        mock_load_config.return_value = mock_wiki_config
-
-        mock_server = AsyncMock()
-        mock_server_class.return_value = mock_server
-
-        server = WikiJSMCPServer()
-
-        await server.run_http(host="0.0.0.0", port=9000)
-
-        mock_config_class.assert_called_once()
-        config_call = mock_config_class.call_args
-        assert config_call[1]["host"] == "0.0.0.0"
-        assert config_call[1]["port"] == 9000
-
-    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
-    @patch("wikijs_mcp.config.WikiJSConfig.validate_config")
-    async def test_run_http_validation_error(
-        self, mock_validate, mock_load_config, mock_wiki_config
-    ):
-        """Test run_http method with validation error."""
-        mock_load_config.return_value = mock_wiki_config
-        mock_validate.side_effect = ValueError("Invalid config")
-
-        server = WikiJSMCPServer()
-
-        with pytest.raises(ValueError, match="Invalid config"):
-            await server.run_http()
 
 
 @pytest.mark.integration
@@ -927,91 +853,27 @@ class TestMainFunction:
 
     @patch("wikijs_mcp.server.WikiJSMCPServer")
     @patch("logging.basicConfig")
-    @patch("os.getenv")
     @patch("sys.argv", ["server.py"])
-    async def test_main_default_http(
-        self, mock_getenv, mock_logging, mock_server_class
-    ):
-        """Test main function with default HTTP transport."""
+    async def test_main_runs_stdio(self, mock_logging, mock_server_class):
+        """Test main function runs stdio server."""
         from wikijs_mcp.server import main
 
-        mock_getenv.return_value = "http"
-        mock_server = AsyncMock()
-        mock_server_class.return_value = mock_server
-
-        await main()
-
-        mock_server.run_http.assert_called_once()
-        mock_server.run_stdio.assert_not_called()
-
-    @patch("wikijs_mcp.server.WikiJSMCPServer")
-    @patch("logging.basicConfig")
-    @patch("os.getenv")
-    @patch("sys.argv", ["server.py", "--stdio"])
-    async def test_main_stdio_arg(self, mock_getenv, mock_logging, mock_server_class):
-        """Test main function with --stdio argument."""
-        from wikijs_mcp.server import main
-
-        mock_getenv.return_value = "http"
         mock_server = AsyncMock()
         mock_server_class.return_value = mock_server
 
         await main()
 
         mock_server.run_stdio.assert_called_once()
-        mock_server.run_http.assert_not_called()
 
-    @patch("wikijs_mcp.server.WikiJSMCPServer")
-    @patch("logging.basicConfig")
-    @patch("os.getenv")
-    @patch("sys.argv", ["server.py", "--http"])
-    async def test_main_http_arg(self, mock_getenv, mock_logging, mock_server_class):
-        """Test main function with --http argument."""
-        from wikijs_mcp.server import main
-
-        mock_getenv.return_value = "stdio"
-        mock_server = AsyncMock()
-        mock_server_class.return_value = mock_server
-
-        await main()
-
-        mock_server.run_http.assert_called_once()
-        mock_server.run_stdio.assert_not_called()
-
-    @patch("wikijs_mcp.server.WikiJSMCPServer")
-    @patch("logging.basicConfig")
-    @patch("os.getenv")
     @patch("sys.argv", ["server.py", "--help"])
     @patch("builtins.print")
-    async def test_main_help_arg(
-        self, mock_print, mock_getenv, mock_logging, mock_server_class
-    ):
+    async def test_main_help_arg(self, mock_print):
         """Test main function with --help argument."""
         from wikijs_mcp.server import main
 
         await main()
 
         mock_print.assert_called()
-        mock_server_class.assert_called_once()
-
-        # Check that help text was printed
         print_calls = [call[0][0] for call in mock_print.call_args_list]
         assert any("WikiJS MCP Server" in call for call in print_calls)
         assert any("Usage:" in call for call in print_calls)
-
-    @patch("wikijs_mcp.server.WikiJSMCPServer")
-    @patch("logging.basicConfig")
-    @patch("os.getenv")
-    @patch("sys.argv", ["server.py"])
-    async def test_main_stdio_env(self, mock_getenv, mock_logging, mock_server_class):
-        """Test main function with stdio environment variable."""
-        from wikijs_mcp.server import main
-
-        mock_getenv.return_value = "stdio"
-        mock_server = AsyncMock()
-        mock_server_class.return_value = mock_server
-
-        await main()
-
-        mock_server.run_stdio.assert_called_once()
-        mock_server.run_http.assert_not_called()
