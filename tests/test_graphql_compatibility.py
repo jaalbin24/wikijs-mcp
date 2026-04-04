@@ -1,8 +1,10 @@
 """Tests for GraphQL API compatibility with Wiki.js."""
 
-import pytest
 from unittest.mock import AsyncMock, Mock
+
 import httpx
+import pytest
+
 from wikijs_mcp.client import WikiJSClient
 from wikijs_mcp.config import WikiJSConfig
 
@@ -179,7 +181,7 @@ class TestGraphQLCompatibility:
         assert result[0]["id"] == 1
         assert result[0]["path"] == "docs"
         assert result[0]["title"] == "Documentation"
-        assert result[0]["isFolder"] == True
+        assert result[0]["isFolder"]
 
     @pytest.mark.parametrize(
         "field_list,should_contain,should_not_contain",

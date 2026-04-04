@@ -1,10 +1,10 @@
-"""WikiJS MCP Server implementation over HTTP."""
+"""WikiJS MCP Server."""
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional
+
 from mcp.server import FastMCP
-from mcp.types import TextContent
+
 from .client import WikiJSClient
 from .config import WikiJSConfig
 
@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class WikiJSMCPServer:
-    """MCP Server for Wiki.js integration over HTTP."""
+    """MCP Server for Wiki.js integration."""
 
     def __init__(self):
         self.config = WikiJSConfig.load_config()
@@ -55,7 +55,7 @@ class WikiJSMCPServer:
 
         @self.app.tool(description="Get a specific wiki page by path or ID")
         async def wiki_get_page(
-            path: Optional[str] = None, id: Optional[int] = None, locale: str = "en"
+            path: str | None = None, id: int | None = None, locale: str = "en"
         ) -> str:
             """Get a specific wiki page by path or ID.
 
@@ -134,7 +134,7 @@ class WikiJSMCPServer:
             parent_path: str = "",
             mode: str = "ALL",
             locale: str = "en",
-            parent_id: Optional[int] = None,
+            parent_id: int | None = None,
         ) -> str:
             """Get wiki page tree structure.
 
@@ -168,7 +168,7 @@ class WikiJSMCPServer:
             title: str,
             content: str,
             description: str = "",
-            tags: List[str] = None,
+            tags: list[str] = None,
         ) -> str:
             """Create a new wiki page.
 
@@ -192,7 +192,7 @@ class WikiJSMCPServer:
                 )
 
                 page_info = result.get("page", {})
-                response = f"✅ Successfully created page:\n\n"
+                response = "✅ Successfully created page:\n\n"
                 response += f"**Title:** {page_info.get('title', title)}\n"
                 response += f"**Path:** {page_info.get('path', path)}\n"
                 response += f"**ID:** {page_info.get('id', 'Unknown')}\n"
@@ -202,20 +202,65 @@ class WikiJSMCPServer:
         @self.app.tool(description="Update an existing wiki page")
         async def wiki_update_page(
             id: int,
-            content: str,
-            title: Optional[str] = None,
-            description: Optional[str] = None,
-            tags: Optional[List[str]] = None,
+            content: str | None = None,
+            edits: list[dict] | None = None,
+            title: str | None = None,
+            description: str | None = None,
+            tags: list[str] | None = None,
         ) -> str:
             """Update an existing wiki page.
 
+            Supports two modes for changing content:
+            - Full replace: provide 'content' with the entire new page body.
+            - Find-and-replace: provide 'edits' as a list of
+              {"old_text": "...", "new_text": "..."} pairs. Each old_text is
+              replaced with new_text in the existing page content.
+
+            Use 'edits' for small changes to avoid regenerating the full page.
+            Do not provide both 'content' and 'edits'.
+
             Args:
                 id: Page ID to update
-                content: New page content in markdown
+                content: Full replacement content in markdown (optional)
+                edits: List of find-and-replace edits (optional)
                 title: New page title (optional)
                 description: New page description (optional)
                 tags: New page tags (optional)
             """
+            if content is not None and edits is not None:
+                raise ValueError(
+                    "Cannot specify both 'content' and 'edits' — use one or the other"
+                )
+
+            applied_edits = []
+
+            if edits is not None:
+                async with WikiJSClient(self.config) as client:
+                    current_page = await client.get_page_by_id(id)
+                    if not current_page:
+                        return f"Page with ID {id} not found"
+
+                    current_content = current_page.get("content", "")
+
+                    for edit in edits:
+                        old_text = edit.get("old_text", "")
+                        new_text = edit.get("new_text", "")
+
+                        if not old_text:
+                            raise ValueError(
+                                "Each edit must have a non-empty 'old_text'"
+                            )
+
+                        if old_text not in current_content:
+                            raise ValueError(
+                                f"old_text not found in page content: {old_text[:80]!r}"
+                            )
+
+                        current_content = current_content.replace(old_text, new_text, 1)
+                        applied_edits.append((old_text, new_text))
+
+                    content = current_content
+
             async with WikiJSClient(self.config) as client:
                 result = await client.update_page(
                     page_id=id,
@@ -226,11 +271,22 @@ class WikiJSMCPServer:
                 )
 
                 page_info = result.get("page", {})
-                response = f"✅ Successfully updated page:\n\n"
+                response = "Successfully updated page:\n\n"
                 response += f"**Title:** {page_info.get('title', 'Unknown')}\n"
                 response += f"**Path:** {page_info.get('path', 'Unknown')}\n"
                 response += f"**ID:** {page_info.get('id', id)}\n"
                 response += f"**Updated:** {page_info.get('updatedAt', 'Just now')}\n"
+
+                if applied_edits:
+                    response += f"\nApplied {len(applied_edits)} edit(s):\n"
+                    for old_text, new_text in applied_edits:
+                        old_preview = (
+                            old_text[:60] + "..." if len(old_text) > 60 else old_text
+                        )
+                        new_preview = (
+                            new_text[:60] + "..." if len(new_text) > 60 else new_text
+                        )
+                        response += f'  - "{old_preview}" → "{new_preview}"\n'
 
                 return response
 
@@ -277,7 +333,7 @@ class WikiJSMCPServer:
                     destination_locale=destination_locale,
                 )
 
-                response = f"✅ Successfully moved page:\n\n"
+                response = "✅ Successfully moved page:\n\n"
                 response += f"**Title:** {current_page.get('title', 'Unknown')}\n"
                 response += f"**From:** {current_path} (locale: {current_locale})\n"
                 response += (
@@ -302,8 +358,8 @@ class WikiJSMCPServer:
             raise
 
 
-async def main():
-    """Main entry point."""
+async def _async_main():
+    """Async entry point."""
     import sys
 
     logging.basicConfig(level=logging.INFO)
@@ -311,8 +367,8 @@ async def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--help":
         print("WikiJS MCP Server")
         print("Usage:")
-        print("  python -m wikijs_mcp.server")
-        print("  python -m wikijs_mcp.server --help")
+        print("  wikijs-mcp")
+        print("  wikijs-mcp --help")
         print("")
         print("Runs the MCP server over stdio for use with Claude Code")
         print("and other MCP clients.")
@@ -322,5 +378,10 @@ async def main():
     await server.run_stdio()
 
 
+def main():
+    """Entry point for the wikijs-mcp command."""
+    asyncio.run(_async_main())
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

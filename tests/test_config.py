@@ -1,8 +1,10 @@
 """Tests for configuration management."""
 
 import os
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import patch, Mock
+
 from wikijs_mcp.config import WikiJSConfig
 
 
@@ -58,34 +60,31 @@ class TestWikiJSConfig:
         """Test successful config validation."""
         config = WikiJSConfig(url="https://test-wiki.com", api_key="test-api-key")
 
-        # Should not raise any exception
         config.validate_config()
 
     def test_validate_config_missing_url(self):
         """Test config validation with missing URL."""
         config = WikiJSConfig(api_key="test-api-key")
 
-        with pytest.raises(ValueError, match="WIKIJS_URL must be set"):
+        with pytest.raises(ValueError, match="WIKIJS_URL"):
             config.validate_config()
 
     def test_validate_config_missing_api_key(self):
         """Test config validation with missing API key."""
         config = WikiJSConfig(url="https://test-wiki.com")
 
-        with pytest.raises(ValueError, match="WIKIJS_API_KEY must be set"):
+        with pytest.raises(ValueError, match="WIKIJS_API_KEY"):
             config.validate_config()
 
     def test_validate_config_missing_both(self):
         """Test config validation with missing URL and API key."""
         config = WikiJSConfig()
 
-        with pytest.raises(ValueError, match="WIKIJS_URL must be set"):
+        with pytest.raises(ValueError, match="WIKIJS_URL"):
             config.validate_config()
 
-    @patch("wikijs_mcp.config.load_dotenv")
-    def test_load_config_from_plain_env_file(self, mock_load_dotenv, temp_env_file):
-        """Test loading config from plain .env file."""
-        # Mock environment variables
+    def test_load_config_from_env_vars(self):
+        """Test loading config from environment variables."""
         env_vars = {
             "WIKIJS_URL": "https://test-wiki.com",
             "WIKIJS_API_KEY": "test-key-123",
@@ -94,28 +93,24 @@ class TestWikiJSConfig:
         }
 
         with patch.dict(os.environ, env_vars):
-            config = WikiJSConfig.load_config(temp_env_file)
+            config = WikiJSConfig.load_config()
 
         assert config.url == "https://test-wiki.com"
         assert config.api_key == "test-key-123"
         assert config.graphql_endpoint == "/api/graphql"
         assert config.debug is True
-        mock_load_dotenv.assert_called_with(temp_env_file)
 
-    def test_load_config_no_files_exist(self, temp_dir, capsys):
-        """Test config loading when no config files exist."""
-        env_file = os.path.join(temp_dir, ".env")
+    def test_load_config_with_defaults(self):
+        """Test that load_config uses defaults for missing env vars."""
+        env_vars = {"WIKIJS_URL": "https://test.com", "WIKIJS_API_KEY": "test-key"}
 
-        with patch("os.path.exists", return_value=False):
-            config = WikiJSConfig.load_config(env_file)
+        with patch.dict(os.environ, env_vars):
+            config = WikiJSConfig.load_config()
 
-        # Should create config with defaults
-        assert config.url == ""
-        assert config.api_key == ""
-
-        # Should print helpful message
-        captured = capsys.readouterr()
-        assert "No configuration found" in captured.out
+        assert config.url == "https://test.com"
+        assert config.api_key == "test-key"
+        assert config.graphql_endpoint == "/graphql"
+        assert config.debug is False
 
     @pytest.mark.parametrize(
         "debug_value,expected",
@@ -138,37 +133,7 @@ class TestWikiJSConfig:
             "DEBUG": debug_value,
         }
 
-        with patch.dict(os.environ, env_vars), patch("wikijs_mcp.config.load_dotenv"):
-            config = WikiJSConfig.load_config(".env")
+        with patch.dict(os.environ, env_vars):
+            config = WikiJSConfig.load_config()
 
         assert config.debug is expected
-
-    def test_load_config_preserves_defaults(self, temp_dir):
-        """Test that load_config preserves default values for missing env vars."""
-        env_file = os.path.join(temp_dir, ".env")
-
-        # Only set required variables
-        env_vars = {"WIKIJS_URL": "https://test.com", "WIKIJS_API_KEY": "test-key"}
-
-        with (
-            patch.dict(os.environ, env_vars),
-            patch("wikijs_mcp.config.load_dotenv"),
-            patch("os.path.exists", return_value=True),
-        ):
-            config = WikiJSConfig.load_config(env_file)
-
-        assert config.url == "https://test.com"
-        assert config.api_key == "test-key"
-        assert config.graphql_endpoint == "/graphql"  # Default
-        assert config.debug is False  # Default
-
-    def test_config_immutable_after_creation(self):
-        """Test that config values can't be modified after creation."""
-        config = WikiJSConfig(url="https://test.com")
-
-        # This should work (Pydantic allows it by default)
-        # If you want immutability, you'd need to set frozen=True in the model
-        original_url = config.url
-        config.url = "https://changed.com"
-        assert config.url == "https://changed.com"
-        assert config.url != original_url

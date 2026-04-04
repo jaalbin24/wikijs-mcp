@@ -16,12 +16,12 @@ An MCP server that connects Claude to your [Wiki.js](https://js.wiki/) instance.
 claude mcp add wikijs \
   -e WIKIJS_URL=https://your-wiki.com \
   -e WIKIJS_API_KEY=your-api-key \
-  -- python -m wikijs_mcp.server
+  -- pipx run wikijs-mcp
 ```
 
 Verify with `claude mcp list`.
 
-### Manual Configuration
+### Other MCP clients
 
 Add to your MCP client config:
 
@@ -29,8 +29,8 @@ Add to your MCP client config:
 {
   "mcpServers": {
     "wikijs": {
-      "command": "python",
-      "args": ["-m", "wikijs_mcp.server"],
+      "command": "pipx",
+      "args": ["run", "wikijs-mcp"],
       "env": {
         "WIKIJS_URL": "https://your-wiki.com",
         "WIKIJS_API_KEY": "your-api-key"
@@ -40,11 +40,7 @@ Add to your MCP client config:
 }
 ```
 
-In both cases, you'll need the package installed first:
-
-```bash
-pip install -e .
-```
+You can substitute `pipx run wikijs-mcp` with `uvx wikijs-mcp` or install globally with `pip install wikijs-mcp` and use `wikijs-mcp` as the command.
 
 ## Tools
 
@@ -62,11 +58,10 @@ pip install -e .
 ## Development
 
 ```bash
+git clone https://git.kriib.com/Kriib/wikijs-mcp.git
+cd wikijs-mcp
 pip install -e ".[dev]"
 pytest
-pytest --cov=wikijs_mcp
-black wikijs_mcp/ tests/
-mypy wikijs_mcp/
 ```
 
 ## License

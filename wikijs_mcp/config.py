@@ -1,9 +1,8 @@
 """Configuration management for WikiJS MCP Server."""
 
 import os
-from typing import Optional
+
 from pydantic import BaseModel, Field
-from dotenv import load_dotenv
 
 
 class WikiJSConfig(BaseModel):
@@ -15,15 +14,8 @@ class WikiJSConfig(BaseModel):
     debug: bool = Field(default=False)
 
     @classmethod
-    def load_config(cls, env_file: str = ".env") -> "WikiJSConfig":
-        """Load configuration from .env file."""
-        if os.path.exists(env_file):
-            load_dotenv(env_file)
-        else:
-            print(
-                f"No configuration found at {env_file}. Please create a .env file with your WikiJS settings."
-            )
-
+    def load_config(cls) -> "WikiJSConfig":
+        """Load configuration from environment variables."""
         return cls(
             url=os.getenv("WIKIJS_URL", ""),
             api_key=os.getenv("WIKIJS_API_KEY", ""),
@@ -47,6 +39,6 @@ class WikiJSConfig(BaseModel):
     def validate_config(self) -> None:
         """Validate that required configuration is present."""
         if not self.url:
-            raise ValueError("WIKIJS_URL must be set in your .env file.")
+            raise ValueError("WIKIJS_URL environment variable must be set.")
         if not self.api_key:
-            raise ValueError("WIKIJS_API_KEY must be set in your .env file.")
+            raise ValueError("WIKIJS_API_KEY environment variable must be set.")

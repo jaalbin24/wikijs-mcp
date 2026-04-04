@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "wikijs": {
-      "command": "docker",
-      "args": ["compose", "run", "--rm", "-T", "wikijs-mcp-server", "python3", "-m", "wikijs_mcp.server"]
+      "command": "pipx",
+      "args": ["run", "wikijs-mcp"]
     }
   }
 }

@@ -1,8 +1,10 @@
 """Wiki.js GraphQL API client."""
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 import httpx
+
 from .config import WikiJSConfig
 
 logger = logging.getLogger(__name__)
@@ -22,8 +24,8 @@ class WikiJSClient:
         await self.client.aclose()
 
     async def _execute_query(
-        self, query: str, variables: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        self, query: str, variables: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Execute a GraphQL query against the Wiki.js API."""
         payload = {"query": query}
         if variables:
@@ -49,68 +51,38 @@ class WikiJSClient:
             logger.error(f"Request failed: {str(e)}")
             raise
 
-    async def search_pages(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
-        """Search for pages by title or content. Uses correct schema parameters."""
-        # Try GraphQL search with required path and locale parameters
-        try:
-            graphql_query = """
-            query SearchPages($query: String!, $path: String, $locale: String) {
-                pages {
-                    search(query: $query, path: $path, locale: $locale) {
-                        results {
-                            id
-                            title
-                            description
-                            path
-                            locale
-                        }
-                        totalHits
+    async def search_pages(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
+        """Search for pages by title or content."""
+        graphql_query = """
+        query SearchPages($query: String!, $path: String, $locale: String) {
+            pages {
+                search(query: $query, path: $path, locale: $locale) {
+                    results {
+                        id
+                        title
+                        description
+                        path
+                        locale
                     }
+                    totalHits
                 }
             }
-            """
+        }
+        """
 
-            # Use empty path to search all paths, default locale
-            variables = {
-                "query": query,
-                "path": "",  # Search all paths
-                "locale": "en",  # Default locale
-            }
+        variables = {
+            "query": query,
+            "path": "",
+            "locale": "en",
+        }
 
-            result = await self._execute_query(graphql_query, variables)
-            results = result.get("pages", {}).get("search", {}).get("results", [])
-            return results[:limit]  # Apply limit manually
-        except Exception:
-            # Fallback: Filter pages from list_pages
-            all_pages = await self.list_pages(limit=1000)
-            query_lower = query.lower()
-            filtered_pages = []
-
-            for page in all_pages:
-                if (
-                    query_lower in page.get("title", "").lower()
-                    or query_lower in page.get("description", "").lower()
-                    or query_lower in page.get("path", "").lower()
-                ):
-                    # Transform to match PageSearchResult schema (remove extra fields)
-                    search_result = {
-                        "id": str(
-                            page.get("id", "")
-                        ),  # Convert to string to match schema
-                        "title": page.get("title", ""),
-                        "description": page.get("description", ""),
-                        "path": page.get("path", ""),
-                        "locale": page.get("locale", "en"),
-                    }
-                    filtered_pages.append(search_result)
-                    if len(filtered_pages) >= limit:
-                        break
-
-            return filtered_pages
+        result = await self._execute_query(graphql_query, variables)
+        results = result.get("pages", {}).get("search", {}).get("results", [])
+        return results[:limit]
 
     async def get_page_by_path(
         self, path: str, locale: str = "en"
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Get a page by its path using the singleByPath query."""
         graphql_query = """
         query GetPageByPath($path: String!, $locale: String!) {
@@ -149,7 +121,7 @@ class WikiJSClient:
         )
         return result.get("pages", {}).get("singleByPath")
 
-    async def get_page_by_id(self, page_id: int) -> Optional[Dict[str, Any]]:
+    async def get_page_by_id(self, page_id: int) -> dict[str, Any] | None:
         """Get a page by its ID using the single query."""
         graphql_query = """
         query GetPageById($id: Int!) {
@@ -186,10 +158,8 @@ class WikiJSClient:
         result = await self._execute_query(graphql_query, {"id": page_id})
         return result.get("pages", {}).get("single")
 
-    async def list_pages(
-        self, limit: int = 50, offset: int = 0
-    ) -> List[Dict[str, Any]]:
-        """List all pages with pagination."""
+    async def list_pages(self, limit: int = 50) -> list[dict[str, Any]]:
+        """List all pages."""
         graphql_query = """
         query ListPages($limit: Int!) {
             pages {
@@ -215,7 +185,7 @@ class WikiJSClient:
         mode: str = "ALL",
         locale: str = "en",
         parent_id: int = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get page tree structure using the correct schema."""
         graphql_query = """
         query GetPageTree($path: String, $parent: Int, $mode: PageTreeMode!, $locale: String!, $includeAncestors: Boolean) {
@@ -255,10 +225,10 @@ class WikiJSClient:
         description: str = "",
         editor: str = "markdown",
         locale: str = "en",
-        tags: Optional[List[str]] = None,
+        tags: list[str] | None = None,
         is_published: bool = True,
         is_private: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Create a new page using the correct schema."""
         graphql_query = """
         mutation CreatePage(
@@ -326,16 +296,16 @@ class WikiJSClient:
     async def update_page(
         self,
         page_id: int,
-        content: Optional[str] = None,
-        title: Optional[str] = None,
-        description: Optional[str] = None,
-        tags: Optional[List[str]] = None,
-        editor: Optional[str] = None,
-        is_private: Optional[bool] = None,
-        is_published: Optional[bool] = None,
-        locale: Optional[str] = None,
-        path: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        content: str | None = None,
+        title: str | None = None,
+        description: str | None = None,
+        tags: list[str] | None = None,
+        editor: str | None = None,
+        is_private: bool | None = None,
+        is_published: bool | None = None,
+        locale: str | None = None,
+        path: str | None = None,
+    ) -> dict[str, Any]:
         """Update an existing page. Retrieves current page data and merges with updates."""
 
         # First, get the current page to ensure we have all required fields
@@ -372,7 +342,12 @@ class WikiJSClient:
                 locale if locale is not None else current_page.get("locale", "en")
             ),
             "path": path if path is not None else current_page.get("path", ""),
-            "tags": tags if tags is not None else [],
+            "tags": tags
+            if tags is not None
+            else [
+                tag.get("tag", tag.get("title", str(tag)))
+                for tag in current_page.get("tags", [])
+            ],
         }
 
         graphql_query = """
@@ -428,7 +403,7 @@ class WikiJSClient:
 
         return update_result
 
-    async def delete_page(self, page_id: int) -> Dict[str, Any]:
+    async def delete_page(self, page_id: int) -> dict[str, Any]:
         """Delete a page."""
         graphql_query = """
         mutation DeletePage($id: Int!) {
@@ -457,7 +432,7 @@ class WikiJSClient:
 
     async def move_page(
         self, page_id: int, destination_path: str, destination_locale: str = "en"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Move a page to a new path and/or locale."""
         graphql_query = """
         mutation MovePage($id: Int!, $destinationPath: String!, $destinationLocale: String!) {

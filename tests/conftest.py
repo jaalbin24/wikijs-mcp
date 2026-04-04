@@ -1,41 +1,11 @@
 """Pytest configuration and fixtures."""
 
 import os
-import tempfile
-import pytest
 from unittest.mock import Mock, patch
+
+import pytest
+
 from wikijs_mcp.config import WikiJSConfig
-
-
-@pytest.fixture
-def temp_dir():
-    """Create a temporary directory for tests."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        yield temp_dir
-
-
-@pytest.fixture
-def temp_env_file(temp_dir):
-    """Create a temporary .env file for testing."""
-    env_path = os.path.join(temp_dir, ".env")
-    env_content = """WIKIJS_URL=https://test-wiki.example.com
-WIKIJS_API_KEY=test-api-key-123
-WIKIJS_GRAPHQL_ENDPOINT=/graphql
-DEBUG=true
-"""
-    with open(env_path, "w") as f:
-        f.write(env_content)
-    return env_path
-
-
-@pytest.fixture
-def sample_env_content():
-    """Sample environment file content."""
-    return """WIKIJS_URL=https://test-wiki.example.com
-WIKIJS_API_KEY=test-api-key-123
-WIKIJS_GRAPHQL_ENDPOINT=/graphql
-DEBUG=true
-"""
 
 
 @pytest.fixture
@@ -56,7 +26,6 @@ def mock_httpx_client():
         mock_instance = Mock()
         mock_client.return_value = mock_instance
 
-        # Mock async context manager
         mock_instance.__aenter__ = Mock(return_value=mock_instance)
         mock_instance.__aexit__ = Mock(return_value=None)
 
@@ -110,7 +79,6 @@ def clean_env():
     """Clean environment variables before each test."""
     env_vars = ["WIKIJS_URL", "WIKIJS_API_KEY", "WIKIJS_GRAPHQL_ENDPOINT", "DEBUG"]
 
-    # Store original values
     original_values = {}
     for var in env_vars:
         original_values[var] = os.environ.get(var)
@@ -119,7 +87,6 @@ def clean_env():
 
     yield
 
-    # Restore original values
     for var, value in original_values.items():
         if value is not None:
             os.environ[var] = value

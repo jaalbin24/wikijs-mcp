@@ -1,8 +1,10 @@
 """Tests for WikiJS GraphQL client."""
 
-import pytest
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
+
 import httpx
+import pytest
+
 from wikijs_mcp.client import WikiJSClient
 from wikijs_mcp.config import WikiJSConfig
 
@@ -128,78 +130,6 @@ class TestWikiJSClient:
         assert "SearchPages" in call_args[0][0]
         expected_vars = {"query": "test query", "path": "", "locale": "en"}
         assert call_args[0][1] == expected_vars
-
-    async def test_search_pages_with_fallback(self, mock_wiki_config):
-        """Test search_pages fallback to list_pages when GraphQL search fails."""
-        client = WikiJSClient(mock_wiki_config)
-
-        # Mock GraphQL search to fail
-        client._execute_query = AsyncMock(
-            side_effect=Exception("GraphQL search failed")
-        )
-
-        # Mock list_pages response for fallback
-        list_pages_response = [
-            {
-                "id": 1,
-                "path": "docs/test",
-                "title": "Test Page Title",
-                "description": "Test description",
-                "locale": "en",
-            },
-            {
-                "id": 2,
-                "path": "other/page",
-                "title": "Other Page",
-                "description": "Not matching",
-                "locale": "en",
-            },
-        ]
-
-        with patch.object(client, "list_pages", new_callable=AsyncMock) as mock_list:
-            mock_list.return_value = list_pages_response
-
-            results = await client.search_pages("test", 10)
-
-            # Should return only the matching page from fallback
-            assert len(results) == 1
-            assert results[0]["title"] == "Test Page Title"
-            assert results[0]["id"] == "1"  # Converted to string
-            assert results[0]["locale"] == "en"
-
-            # Verify fallback was called
-            mock_list.assert_called_once_with(limit=1000)
-
-    async def test_search_pages_fallback_limit_applied(self, mock_wiki_config):
-        """Test that limit is applied correctly in fallback mode."""
-        client = WikiJSClient(mock_wiki_config)
-
-        # Mock GraphQL search to fail
-        client._execute_query = AsyncMock(
-            side_effect=Exception("GraphQL search failed")
-        )
-
-        # Mock many matching pages for fallback
-        list_pages_response = [
-            {
-                "id": i,
-                "path": f"docs/test{i}",
-                "title": f"Test Page {i}",
-                "description": "Test description",
-                "locale": "en",
-            }
-            for i in range(20)
-        ]
-
-        with patch.object(client, "list_pages", new_callable=AsyncMock) as mock_list:
-            mock_list.return_value = list_pages_response
-
-            results = await client.search_pages("test", 5)
-
-            # Should return only 5 results due to limit
-            assert len(results) == 5
-            for i, result in enumerate(results):
-                assert result["title"] == f"Test Page {i}"
 
     async def test_search_pages_graphql_limit_applied(self, mock_wiki_config):
         """Test that limit is applied manually when GraphQL returns more results than requested."""
@@ -626,10 +556,9 @@ class TestWikiJSClient:
             assert variables["path"] == "docs/current-page"
 
     async def test_update_page_partial_update(self, mock_wiki_config):
-        """Test partial page update preserves existing values."""
+        """Test partial page update preserves existing values including tags."""
         client = WikiJSClient(mock_wiki_config)
 
-        # Mock get_page_by_id to return current page data
         current_page_data = {
             "id": 456,
             "path": "docs/existing-page",
@@ -640,6 +569,10 @@ class TestWikiJSClient:
             "isPrivate": True,
             "isPublished": False,
             "locale": "fr",
+            "tags": [
+                {"tag": "existing-tag", "title": "Existing Tag"},
+                {"tag": "keep-me", "title": "Keep Me"},
+            ],
         }
 
         update_response = {
@@ -659,25 +592,24 @@ class TestWikiJSClient:
             mock_get.return_value = current_page_data
             client._execute_query = AsyncMock(return_value=update_response)
 
-            # Only update content and description
+            # Only update content and description — tags should be preserved
             result = await client.update_page(
                 page_id=456, content="New content only", description="New description"
             )
 
             assert result["responseResult"]["succeeded"] is True
 
-            # Verify all existing values were preserved
             call_args = client._execute_query.call_args
             variables = call_args[0][1]
             assert variables["content"] == "New content only"
             assert variables["description"] == "New description"
-            # Preserved values
             assert variables["title"] == "Existing Title"
             assert variables["editor"] == "asciidoc"
             assert variables["isPrivate"] is True
             assert variables["isPublished"] is False
             assert variables["locale"] == "fr"
             assert variables["path"] == "docs/existing-page"
+            assert variables["tags"] == ["existing-tag", "keep-me"]
 
     async def test_update_page_not_found(self, mock_wiki_config):
         """Test update page when page doesn't exist."""

@@ -1,14 +1,16 @@
 """Tests for MCP server functionality."""
 
 import asyncio
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
 import pytest
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
+
 from wikijs_mcp.server import WikiJSMCPServer
 
 
 def get_tool_response_text(result):
     """Helper function to extract text from MCP tool response.
-    
+
     Handles both old format (list of TextContent) and new format (tuple with content and result dict).
     """
     if isinstance(result, tuple):
@@ -586,6 +588,107 @@ class TestWikiJSMCPServer:
 
     @patch("wikijs_mcp.server.WikiJSConfig.load_config")
     @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_update_page_with_edits(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test calling update_page tool with find-and-replace edits."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.get_page_by_id.return_value = {
+            "id": 1,
+            "title": "Test Page",
+            "path": "/test",
+            "content": "Hello world. This is old text. Goodbye.",
+        }
+        mock_client_instance.update_page.return_value = {
+            "page": {
+                "id": 1,
+                "title": "Test Page",
+                "path": "/test",
+                "updatedAt": "2023-01-02",
+            }
+        }
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool(
+            "wiki_update_page",
+            {
+                "id": 1,
+                "edits": [
+                    {"old_text": "old text", "new_text": "new text"},
+                    {"old_text": "Goodbye", "new_text": "Farewell"},
+                ],
+            },
+        )
+        response_text = get_tool_response_text(result)
+        assert "Successfully updated page" in response_text
+        assert "Applied 2 edit(s)" in response_text
+        assert '"old text" → "new text"' in response_text
+
+        # Verify the final content passed to update_page
+        call_args = mock_client_instance.update_page.call_args
+        assert call_args[1]["content"] == "Hello world. This is new text. Farewell."
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_update_page_edits_not_found(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test update_page with edits when old_text is not found."""
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.get_page_by_id.return_value = {
+            "id": 1,
+            "title": "Test Page",
+            "path": "/test",
+            "content": "Hello world.",
+        }
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        with pytest.raises(ToolError, match="old_text not found in page content"):
+            await server.app.call_tool(
+                "wiki_update_page",
+                {
+                    "id": 1,
+                    "edits": [{"old_text": "nonexistent text", "new_text": "new"}],
+                },
+            )
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_update_page_content_and_edits_conflict(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test update_page rejects both content and edits."""
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        mock_load_config.return_value = mock_wiki_config
+        server = WikiJSMCPServer()
+
+        with pytest.raises(
+            ToolError, match="Cannot specify both 'content' and 'edits'"
+        ):
+            await server.app.call_tool(
+                "wiki_update_page",
+                {
+                    "id": 1,
+                    "content": "full content",
+                    "edits": [{"old_text": "a", "new_text": "b"}],
+                },
+            )
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
     async def test_call_tool_delete_page_success(
         self, mock_client_class, mock_load_config, mock_wiki_config
     ):
@@ -607,7 +710,9 @@ class TestWikiJSMCPServer:
 
         result = await server.app.call_tool("wiki_delete_page", {"id": 123})
         # MCP response format check removed
-        assert "Successfully deleted page with ID: 123" in get_tool_response_text(result)
+        assert "Successfully deleted page with ID: 123" in get_tool_response_text(
+            result
+        )
         assert "Page deleted successfully" in get_tool_response_text(result)
 
         # Verify client method was called correctly
@@ -632,7 +737,9 @@ class TestWikiJSMCPServer:
 
         result = await server.app.call_tool("wiki_delete_page", {"id": 456})
         # MCP response format check removed
-        assert "Successfully deleted page with ID: 456" in get_tool_response_text(result)
+        assert "Successfully deleted page with ID: 456" in get_tool_response_text(
+            result
+        )
         # Should not have a message line since no message in response
         assert "Message:" not in get_tool_response_text(result)
 
@@ -846,32 +953,31 @@ class TestWikiJSMCPServer:
             await server.run_stdio()
 
 
-
 @pytest.mark.integration
 class TestMainFunction:
     """Test cases for main function."""
 
     @patch("wikijs_mcp.server.WikiJSMCPServer")
     @patch("logging.basicConfig")
-    @patch("sys.argv", ["server.py"])
+    @patch("sys.argv", ["wikijs-mcp"])
     async def test_main_runs_stdio(self, mock_logging, mock_server_class):
         """Test main function runs stdio server."""
-        from wikijs_mcp.server import main
+        from wikijs_mcp.server import _async_main
 
         mock_server = AsyncMock()
         mock_server_class.return_value = mock_server
 
-        await main()
+        await _async_main()
 
         mock_server.run_stdio.assert_called_once()
 
-    @patch("sys.argv", ["server.py", "--help"])
+    @patch("sys.argv", ["wikijs-mcp", "--help"])
     @patch("builtins.print")
     async def test_main_help_arg(self, mock_print):
         """Test main function with --help argument."""
-        from wikijs_mcp.server import main
+        from wikijs_mcp.server import _async_main
 
-        await main()
+        await _async_main()
 
         mock_print.assert_called()
         print_calls = [call[0][0] for call in mock_print.call_args_list]
