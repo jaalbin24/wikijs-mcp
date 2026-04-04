@@ -5,7 +5,7 @@ description = "MCP server for Wiki.js integration"
 authors = []
 license = "MIT"
 readme = "README.md"
-repository = "https://git.kriib.com/Kriib/wikijs-mcp"
+repository = "https://github.com/jaalbin24/wikijs-mcp"
 keywords = ["mcp", "wikijs", "wiki", "claude"]
 classifiers = [
     "Development Status :: 4 - Beta",

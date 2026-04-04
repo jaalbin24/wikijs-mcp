@@ -58,10 +58,10 @@ You can substitute `pipx run wikijs-mcp` with `uvx wikijs-mcp` or install global
 ## Development
 
 ```bash
-git clone https://git.kriib.com/Kriib/wikijs-mcp.git
+git clone https://github.com/jaalbin24/wikijs-mcp.git
 cd wikijs-mcp
-pip install -e ".[dev]"
-pytest
+poetry install
+poetry run pytest
 ```
 
 ## License
