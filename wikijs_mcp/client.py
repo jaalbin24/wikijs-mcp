@@ -5,6 +5,7 @@ import ssl
 from typing import Any
 
 import httpx
+import truststore
 
 from .config import WikiJSConfig
 
@@ -16,9 +17,8 @@ class WikiJSClient:
 
     def __init__(self, config: WikiJSConfig):
         self.config = config
-        self.client = httpx.AsyncClient(
-            timeout=30.0, verify=ssl.create_default_context()
-        )
+        ctx = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        self.client = httpx.AsyncClient(timeout=30.0, verify=ctx)
 
     async def __aenter__(self):
         return self
