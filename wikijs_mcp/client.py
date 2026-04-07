@@ -12,6 +12,37 @@ from .config import WikiJSConfig
 logger = logging.getLogger(__name__)
 
 
+_PAGE_FIELDS_META = """
+                    id
+                    path
+                    title
+                    description
+                    contentType
+                    isPublished
+                    isPrivate
+                    createdAt
+                    updatedAt
+                    editor
+                    locale
+                    authorId
+                    authorName
+                    authorEmail
+                    creatorId
+                    creatorName
+                    creatorEmail
+                    tags {
+                        id
+                        tag
+                        title
+                    }"""
+
+_PAGE_FIELDS_FULL = (
+    _PAGE_FIELDS_META
+    + """
+                    content"""
+)
+
+
 class WikiJSClient:
     """Client for interacting with Wiki.js GraphQL API."""
 
@@ -84,39 +115,23 @@ class WikiJSClient:
         return results[:limit]
 
     async def get_page_by_path(
-        self, path: str, locale: str = "en"
+        self,
+        path: str,
+        locale: str = "en",
+        metadata_only: bool = False,
+        include_render: bool = False,
     ) -> dict[str, Any] | None:
         """Get a page by its path using the singleByPath query."""
-        graphql_query = """
-        query GetPageByPath($path: String!, $locale: String!) {
-            pages {
-                singleByPath(path: $path, locale: $locale) {
-                    id
-                    path
-                    title
-                    description
-                    content
-                    contentType
-                    isPublished
-                    isPrivate
-                    createdAt
-                    updatedAt
-                    editor
-                    locale
-                    authorId
-                    authorName
-                    authorEmail
-                    creatorId
-                    creatorName
-                    creatorEmail
-                    tags {
-                        id
-                        tag
-                        title
-                    }
-                }
-            }
-        }
+        fields = _PAGE_FIELDS_META if metadata_only else _PAGE_FIELDS_FULL
+        if include_render:
+            fields += "\n                    render"
+        graphql_query = f"""
+        query GetPageByPath($path: String!, $locale: String!) {{
+            pages {{
+                singleByPath(path: $path, locale: $locale) {{{fields}
+                }}
+            }}
+        }}
         """
 
         result = await self._execute_query(
@@ -124,62 +139,63 @@ class WikiJSClient:
         )
         return result.get("pages", {}).get("singleByPath")
 
-    async def get_page_by_id(self, page_id: int) -> dict[str, Any] | None:
+    async def get_page_by_id(
+        self,
+        page_id: int,
+        metadata_only: bool = False,
+        include_render: bool = False,
+    ) -> dict[str, Any] | None:
         """Get a page by its ID using the single query."""
-        graphql_query = """
-        query GetPageById($id: Int!) {
-            pages {
-                single(id: $id) {
-                    id
-                    path
-                    title
-                    description
-                    content
-                    contentType
-                    isPublished
-                    isPrivate
-                    createdAt
-                    updatedAt
-                    editor
-                    locale
-                    authorId
-                    authorName
-                    authorEmail
-                    creatorId
-                    creatorName
-                    creatorEmail
-                    tags {
-                        id
-                        tag
-                        title
-                    }
-                }
-            }
-        }
+        fields = _PAGE_FIELDS_META if metadata_only else _PAGE_FIELDS_FULL
+        if include_render:
+            fields += "\n                    render"
+        graphql_query = f"""
+        query GetPageById($id: Int!) {{
+            pages {{
+                single(id: $id) {{{fields}
+                }}
+            }}
+        }}
         """
 
         result = await self._execute_query(graphql_query, {"id": page_id})
         return result.get("pages", {}).get("single")
 
-    async def list_pages(self, limit: int = 50) -> list[dict[str, Any]]:
-        """List all pages."""
+    async def list_pages(
+        self,
+        limit: int = 50,
+        tags: list[str] | None = None,
+        order_by: str = "TITLE",
+        order_by_direction: str = "ASC",
+    ) -> list[dict[str, Any]]:
+        """List all pages with optional filtering and ordering."""
         graphql_query = """
-        query ListPages($limit: Int!) {
+        query ListPages($limit: Int!, $orderBy: PageOrderBy, $orderByDirection: PageOrderByDirection, $tags: [String!]) {
             pages {
-                list(limit: $limit) {
+                list(limit: $limit, orderBy: $orderBy, orderByDirection: $orderByDirection, tags: $tags) {
                     id
                     path
                     title
                     description
+                    contentType
                     updatedAt
                     createdAt
                     locale
+                    tags
                 }
             }
         }
         """
 
-        result = await self._execute_query(graphql_query, {"limit": limit})
+        variables: dict[str, Any] = {
+            "limit": limit,
+            "orderBy": order_by,
+            "orderByDirection": order_by_direction,
+        }
+        if tags is not None:
+            variables["tags"] = tags
+
+        result = await self._execute_query(graphql_query, variables)
         return result.get("pages", {}).get("list", [])
 
     async def get_page_tree(
@@ -467,3 +483,106 @@ class WikiJSClient:
             )
 
         return move_result
+
+    async def list_tags(self) -> list[dict[str, Any]]:
+        """List all tags."""
+        graphql_query = """
+        query ListTags {
+            pages {
+                tags {
+                    id
+                    tag
+                    title
+                    createdAt
+                    updatedAt
+                }
+            }
+        }
+        """
+
+        result = await self._execute_query(graphql_query)
+        return result.get("pages", {}).get("tags", [])
+
+    async def get_site_info(self) -> dict[str, Any]:
+        """Get site configuration info."""
+        graphql_query = """
+        query GetSiteConfig {
+            site {
+                config {
+                    title
+                    description
+                    host
+                }
+            }
+        }
+        """
+
+        result = await self._execute_query(graphql_query)
+        return result.get("site", {}).get("config", {})
+
+    async def get_page_history(
+        self,
+        page_id: int,
+        offset_page: int = 0,
+        offset_size: int = 100,
+    ) -> dict[str, Any]:
+        """Get page edit history."""
+        graphql_query = """
+        query GetPageHistory($id: Int!, $offsetPage: Int, $offsetSize: Int) {
+            pages {
+                history(id: $id, offsetPage: $offsetPage, offsetSize: $offsetSize) {
+                    trail {
+                        versionId
+                        versionDate
+                        authorId
+                        authorName
+                        actionType
+                        valueBefore
+                        valueAfter
+                    }
+                    total
+                }
+            }
+        }
+        """
+
+        variables = {
+            "id": page_id,
+            "offsetPage": offset_page,
+            "offsetSize": offset_size,
+        }
+        result = await self._execute_query(graphql_query, variables)
+        return result.get("pages", {}).get("history", {})
+
+    async def get_page_version(
+        self, page_id: int, version_id: int
+    ) -> dict[str, Any] | None:
+        """Get a specific version of a page."""
+        graphql_query = """
+        query GetPageVersion($pageId: Int!, $versionId: Int!) {
+            pages {
+                version(pageId: $pageId, versionId: $versionId) {
+                    action
+                    authorId
+                    authorName
+                    content
+                    contentType
+                    createdAt
+                    versionDate
+                    description
+                    editor
+                    isPrivate
+                    isPublished
+                    locale
+                    path
+                    tags
+                    title
+                    versionId
+                }
+            }
+        }
+        """
+
+        variables = {"pageId": page_id, "versionId": version_id}
+        result = await self._execute_query(graphql_query, variables)
+        return result.get("pages", {}).get("version")

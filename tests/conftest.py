@@ -74,6 +74,79 @@ def sample_page_data():
     }
 
 
+@pytest.fixture
+def sample_history_data():
+    """Sample page history data for testing."""
+    return {
+        "trail": [
+            {
+                "versionId": 1,
+                "versionDate": "2024-01-01T00:00:00Z",
+                "authorId": 1,
+                "authorName": "Test User",
+                "actionType": "updated",
+                "valueBefore": "",
+                "valueAfter": "",
+            }
+        ],
+        "total": 1,
+    }
+
+
+@pytest.fixture
+def sample_version_data():
+    """Sample page version data for testing."""
+    return {
+        "action": "updated",
+        "authorId": "1",
+        "authorName": "Test User",
+        "content": "# Version Content",
+        "contentType": "markdown",
+        "createdAt": "2024-01-01T00:00:00Z",
+        "versionDate": "2024-01-01T00:00:00Z",
+        "description": "Test version",
+        "editor": "markdown",
+        "isPrivate": False,
+        "isPublished": True,
+        "locale": "en",
+        "path": "docs/test-page",
+        "tags": ["test"],
+        "title": "Test Page Version",
+        "versionId": 1,
+    }
+
+
+@pytest.fixture
+def sample_tags_data():
+    """Sample tags data for testing."""
+    return [
+        {
+            "id": 1,
+            "tag": "dev",
+            "title": "Development",
+            "createdAt": "2024-01-01T00:00:00Z",
+            "updatedAt": "2024-01-01T00:00:00Z",
+        },
+        {
+            "id": 2,
+            "tag": "docs",
+            "title": "Documentation",
+            "createdAt": "2024-01-01T00:00:00Z",
+            "updatedAt": "2024-01-01T00:00:00Z",
+        },
+    ]
+
+
+@pytest.fixture
+def sample_site_config():
+    """Sample site configuration data for testing."""
+    return {
+        "title": "Test Wiki",
+        "description": "A test wiki instance",
+        "host": "https://wiki.example.com",
+    }
+
+
 @pytest.fixture(autouse=True)
 def clean_env():
     """Clean environment variables before each test."""

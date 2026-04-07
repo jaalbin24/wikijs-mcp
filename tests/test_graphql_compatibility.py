@@ -37,8 +37,9 @@ class TestGraphQLCompatibility:
         assert "offset" not in payload["query"]
         assert "offset" not in payload.get("variables", {})
 
-        # Verify only limit is sent
-        assert payload["variables"] == {"limit": 10}
+        # Verify limit and ordering are sent but no offset
+        assert payload["variables"]["limit"] == 10
+        assert "offset" not in str(payload["variables"]).lower()
 
     async def test_list_pages_query_structure(self, mock_wiki_config):
         """Test the exact GraphQL query structure for list_pages."""
@@ -57,8 +58,10 @@ class TestGraphQLCompatibility:
         query = call_args[1]["json"]["query"]
 
         # Verify query structure
-        assert "query ListPages($limit: Int!)" in query
-        assert "list(limit: $limit)" in query
+        assert "query ListPages(" in query
+        assert "$limit: Int!" in query
+        assert "list(" in query
+        assert "limit: $limit" in query
         assert "author" not in query  # No author field
         assert "offset" not in query  # No offset parameter
 

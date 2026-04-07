@@ -42,7 +42,7 @@ class TestWikiJSMCPServer:
         server = WikiJSMCPServer()
 
         tools = await server.app.list_tools()
-        assert len(tools) == 8  # 8 wiki tools
+        assert len(tools) == 12  # 12 wiki tools
 
         tool_names = [tool.name for tool in tools]
         expected_names = [
@@ -54,6 +54,10 @@ class TestWikiJSMCPServer:
             "wiki_update_page",
             "wiki_delete_page",
             "wiki_move_page",
+            "wiki_list_tags",
+            "wiki_get_site_info",
+            "wiki_get_history",
+            "wiki_get_version",
         ]
         assert set(tool_names) == set(expected_names)
 
@@ -161,8 +165,10 @@ class TestWikiJSMCPServer:
         assert "Test Page" in get_tool_response_text(result)
         assert "Test content" in get_tool_response_text(result)
 
-        # Verify default locale was used
-        mock_client_instance.get_page_by_path.assert_called_once_with("/test", "en")
+        # Verify default locale and options were used
+        mock_client_instance.get_page_by_path.assert_called_once_with(
+            "/test", "en", metadata_only=False, include_render=False
+        )
 
     @patch("wikijs_mcp.server.WikiJSConfig.load_config")
     @patch("wikijs_mcp.server.WikiJSClient")
@@ -195,7 +201,9 @@ class TestWikiJSMCPServer:
         assert "Contenu français" in get_tool_response_text(result)
 
         # Verify custom locale was used
-        mock_client_instance.get_page_by_path.assert_called_once_with("/test-fr", "fr")
+        mock_client_instance.get_page_by_path.assert_called_once_with(
+            "/test-fr", "fr", metadata_only=False, include_render=False
+        )
 
     @patch("wikijs_mcp.server.WikiJSConfig.load_config")
     @patch("wikijs_mcp.server.WikiJSClient")
@@ -281,6 +289,7 @@ class TestWikiJSMCPServer:
             "title": "Test Page",
             "path": "/test",
             "content": "Test content",
+            "contentType": "markdown",
             "description": "Test description",
             "editor": "markdown",
             "locale": "en",
@@ -300,6 +309,7 @@ class TestWikiJSMCPServer:
         # MCP response format check removed
         assert "Test description" in get_tool_response_text(result)
         assert "Test Author" in get_tool_response_text(result)
+        assert "Content Type:** markdown" in get_tool_response_text(result)
         # Should handle both tag formats (tag and title)
         assert "test, example" in get_tool_response_text(result)
 
@@ -924,6 +934,475 @@ class TestWikiJSMCPServer:
             await server.app.call_tool(
                 "wiki_move_page", {"id": 123, "destination_path": "docs/existing-page"}
             )
+
+    # --- metadata_only tests ---
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_get_page_metadata_only_by_path(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test get_page with metadata_only=True by path."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.get_page_by_path.return_value = {
+            "id": 1,
+            "title": "Test Page",
+            "path": "/test",
+            "editor": "markdown",
+            "createdAt": "2023-01-01",
+            "updatedAt": "2023-01-02",
+        }
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool(
+            "wiki_get_page", {"path": "/test", "metadata_only": True}
+        )
+        response_text = get_tool_response_text(result)
+        assert "Test Page" in response_text
+        assert "---" not in response_text
+
+        mock_client_instance.get_page_by_path.assert_called_once_with(
+            "/test", "en", metadata_only=True, include_render=False
+        )
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_get_page_metadata_only_by_id(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test get_page with metadata_only=True by ID."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.get_page_by_id.return_value = {
+            "id": 1,
+            "title": "Test Page",
+            "path": "/test",
+            "editor": "markdown",
+            "createdAt": "2023-01-01",
+            "updatedAt": "2023-01-02",
+        }
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool(
+            "wiki_get_page", {"id": 1, "metadata_only": True}
+        )
+        response_text = get_tool_response_text(result)
+        assert "Test Page" in response_text
+        assert "---" not in response_text
+
+        mock_client_instance.get_page_by_id.assert_called_once_with(
+            1, metadata_only=True, include_render=False
+        )
+
+    # --- include_render tests ---
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_get_page_with_render(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test get_page with include_render=True."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.get_page_by_path.return_value = {
+            "id": 1,
+            "title": "Test Page",
+            "path": "/test",
+            "content": "Test content",
+            "render": "<h1>Test</h1>",
+            "createdAt": "2023-01-01",
+            "updatedAt": "2023-01-02",
+        }
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool(
+            "wiki_get_page", {"path": "/test", "include_render": True}
+        )
+        response_text = get_tool_response_text(result)
+        assert "Rendered HTML" in response_text
+        assert "<h1>Test</h1>" in response_text
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_get_page_without_render(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test get_page without include_render does not include rendered HTML."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.get_page_by_path.return_value = {
+            "id": 1,
+            "title": "Test Page",
+            "path": "/test",
+            "content": "Test content",
+            "createdAt": "2023-01-01",
+            "updatedAt": "2023-01-02",
+        }
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool("wiki_get_page", {"path": "/test"})
+        response_text = get_tool_response_text(result)
+        assert "Rendered HTML" not in response_text
+
+    # --- list_pages filtering/ordering tests ---
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_list_pages_with_tags(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test list_pages with tag filtering."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.list_pages.return_value = [
+            {
+                "id": 1,
+                "title": "Dev Page",
+                "path": "/dev",
+                "tags": ["dev"],
+                "updatedAt": "2023-01-01",
+            }
+        ]
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool(
+            "wiki_list_pages", {"limit": 50, "tags": ["dev"]}
+        )
+        response_text = get_tool_response_text(result)
+        assert "Tags: dev" in response_text
+
+        mock_client_instance.list_pages.assert_called_once_with(
+            50, tags=["dev"], order_by="TITLE", order_by_direction="ASC"
+        )
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_list_pages_with_ordering(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test list_pages with custom ordering."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.list_pages.return_value = []
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        await server.app.call_tool(
+            "wiki_list_pages",
+            {"limit": 50, "order_by": "UPDATED", "order_by_direction": "DESC"},
+        )
+
+        mock_client_instance.list_pages.assert_called_once_with(
+            50, tags=None, order_by="UPDATED", order_by_direction="DESC"
+        )
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_list_pages_invalid_order_by(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test list_pages with invalid orderBy value."""
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        mock_load_config.return_value = mock_wiki_config
+        server = WikiJSMCPServer()
+
+        with pytest.raises(ToolError, match="Invalid order_by value"):
+            await server.app.call_tool(
+                "wiki_list_pages", {"limit": 50, "order_by": "INVALID"}
+            )
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_list_pages_invalid_order_direction(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test list_pages with invalid orderByDirection value."""
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        mock_load_config.return_value = mock_wiki_config
+        server = WikiJSMCPServer()
+
+        with pytest.raises(ToolError, match="Invalid order_by_direction value"):
+            await server.app.call_tool(
+                "wiki_list_pages", {"limit": 50, "order_by_direction": "SIDEWAYS"}
+            )
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_list_pages_with_content_type(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test list_pages includes content type in response."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.list_pages.return_value = [
+            {
+                "id": 1,
+                "title": "Page",
+                "path": "/page",
+                "contentType": "asciidoc",
+                "updatedAt": "2023-01-01",
+            }
+        ]
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool("wiki_list_pages", {"limit": 50})
+        assert "Content Type:" in get_tool_response_text(result)
+        assert "asciidoc" in get_tool_response_text(result)
+
+    # --- wiki_list_tags tests ---
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_list_tags_success(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test list_tags with results."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.list_tags.return_value = [
+            {
+                "id": 1,
+                "tag": "dev",
+                "title": "Development",
+                "createdAt": "2024-01-01",
+            }
+        ]
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool("wiki_list_tags", {})
+        response_text = get_tool_response_text(result)
+        assert "Found 1 tag(s)" in response_text
+        assert "Development" in response_text
+        assert "dev" in response_text
+        assert "ID: 1" in response_text
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_list_tags_empty(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test list_tags with no results."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.list_tags.return_value = []
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool("wiki_list_tags", {})
+        assert "No tags found" in get_tool_response_text(result)
+
+    # --- wiki_get_site_info tests ---
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_get_site_info_success(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test get_site_info with results."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.get_site_info.return_value = {
+            "title": "My Wiki",
+            "description": "A wiki",
+            "host": "https://wiki.example.com",
+        }
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool("wiki_get_site_info", {})
+        response_text = get_tool_response_text(result)
+        assert "My Wiki" in response_text
+        assert "A wiki" in response_text
+        assert "https://wiki.example.com" in response_text
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_get_site_info_empty(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test get_site_info with empty response."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.get_site_info.return_value = {}
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool("wiki_get_site_info", {})
+        assert "Could not retrieve site information" in get_tool_response_text(result)
+
+    # --- wiki_get_history tests ---
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_get_history_success(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test get_history with results."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.get_page_history.return_value = {
+            "trail": [
+                {
+                    "versionId": 1,
+                    "versionDate": "2024-01-01",
+                    "authorName": "Alice",
+                    "actionType": "updated",
+                }
+            ],
+            "total": 1,
+        }
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool("wiki_get_history", {"page_id": 42})
+        response_text = get_tool_response_text(result)
+        assert "1 total version(s)" in response_text
+        assert "Alice" in response_text
+        assert "updated" in response_text
+        assert "Version 1" in response_text
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_get_history_with_pagination(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test get_history with pagination parameters."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.get_page_history.return_value = {"trail": [], "total": 0}
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        await server.app.call_tool(
+            "wiki_get_history",
+            {"page_id": 42, "offset_page": 2, "offset_size": 25},
+        )
+
+        mock_client_instance.get_page_history.assert_called_once_with(42, 2, 25)
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_get_history_empty(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test get_history with no results."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.get_page_history.return_value = {"trail": [], "total": 0}
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool("wiki_get_history", {"page_id": 42})
+        assert "No history found" in get_tool_response_text(result)
+
+    # --- wiki_get_version tests ---
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_get_version_success(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test get_version with results."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.get_page_version.return_value = {
+            "title": "Old Title",
+            "content": "Old content",
+            "versionId": 3,
+            "versionDate": "2024-01-01",
+            "authorName": "Alice",
+            "action": "updated",
+            "path": "docs/test",
+            "contentType": "markdown",
+            "editor": "markdown",
+            "tags": ["test"],
+        }
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool(
+            "wiki_get_version", {"page_id": 42, "version_id": 3}
+        )
+        response_text = get_tool_response_text(result)
+        assert "Old Title" in response_text
+        assert "Old content" in response_text
+        assert "Alice" in response_text
+        assert "Version ID:** 3" in response_text
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_get_version_not_found(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test get_version when version not found."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.get_page_version.return_value = None
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool(
+            "wiki_get_version", {"page_id": 42, "version_id": 999}
+        )
+        assert "Version not found" in get_tool_response_text(result)
 
     @patch("wikijs_mcp.server.WikiJSConfig.load_config")
     @patch("wikijs_mcp.config.WikiJSConfig.validate_config")
