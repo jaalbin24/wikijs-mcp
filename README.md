@@ -47,14 +47,18 @@ You can substitute `pipx run wikijs-mcp` with `uvx wikijs-mcp` or install global
 
 | Tool | Description |
 |------|-------------|
-| `wiki_search` | Search pages by title or content |
-| `wiki_get_page` | Get a page by path or ID |
-| `wiki_list_pages` | List all pages |
-| `wiki_get_tree` | Get the page tree structure |
+| `wiki_search` | Full-text search across all wiki pages |
+| `wiki_get_page` | Get a page by path or ID, with optional `metadata_only` and `include_render` modes |
+| `wiki_list_pages` | List pages with optional tag filtering and sort order |
+| `wiki_get_tree` | Get the hierarchical folder/page tree structure |
 | `wiki_create_page` | Create a new page |
-| `wiki_update_page` | Update an existing page |
-| `wiki_move_page` | Move a page to a new path |
+| `wiki_update_page` | Update a page via full replacement or surgical find-and-replace (`edits`) |
+| `wiki_move_page` | Move a page to a new path and/or locale |
 | `wiki_delete_page` | Delete a page |
+| `wiki_list_tags` | List all tags used across the wiki |
+| `wiki_get_site_info` | Get wiki site metadata (title, description, host) |
+| `wiki_get_history` | Get page edit history with pagination |
+| `wiki_get_version` | Retrieve a specific historical version of a page |
 
 ## Development
 
