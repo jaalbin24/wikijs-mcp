@@ -473,6 +473,12 @@ class TestWikiJSMCPServer:
         mock_client_instance = AsyncMock()
         mock_client_instance.__aenter__.return_value = mock_client_instance
         mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.get_localization_config.return_value = {
+            "locale": "zh",
+            "autoUpdate": True,
+            "namespacing": False,
+            "namespaces": ["zh"],
+        }
         mock_client_instance.create_page.return_value = {
             "page": {"id": 1, "title": "New Page", "path": "/new"}
         }
@@ -487,6 +493,16 @@ class TestWikiJSMCPServer:
         # MCP response format check removed
         assert "Successfully created page" in get_tool_response_text(result)
         assert "New Page" in get_tool_response_text(result)
+        mock_client_instance.get_localization_config.assert_awaited_once_with()
+        mock_client_instance.create_page.assert_awaited_once_with(
+            path="/new",
+            title="New Page",
+            content="New content",
+            description="",
+            tags=[],
+            editor="markdown",
+            locale="zh",
+        )
 
     @patch("wikijs_mcp.server.WikiJSConfig.load_config")
     @patch("wikijs_mcp.server.WikiJSClient")
@@ -498,6 +514,7 @@ class TestWikiJSMCPServer:
         mock_client_instance = AsyncMock()
         mock_client_instance.__aenter__.return_value = mock_client_instance
         mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.get_localization_config.return_value = {"locale": "en"}
         mock_client_instance.create_page.return_value = {
             "page": {"id": 1, "title": "New Page", "path": "/new"}
         }
@@ -556,6 +573,7 @@ class TestWikiJSMCPServer:
         )
 
         assert "Successfully created page" in get_tool_response_text(result)
+        mock_client_instance.get_localization_config.assert_not_awaited()
         mock_client_instance.create_page.assert_called_once_with(
             path="/fr/nouvelle",
             title="Page Française",
@@ -564,6 +582,39 @@ class TestWikiJSMCPServer:
             tags=[],
             editor="asciidoc",
             locale="fr",
+        )
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_create_page_falls_back_when_site_locale_missing(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test creating a page falls back to English without a site locale."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.get_localization_config.return_value = {}
+        mock_client_instance.create_page.return_value = {
+            "page": {"id": 1, "title": "New Page", "path": "/new"}
+        }
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        await server.app.call_tool(
+            "wiki_create_page",
+            {"path": "/new", "title": "New Page", "content": "New content"},
+        )
+
+        mock_client_instance.create_page.assert_awaited_once_with(
+            path="/new",
+            title="New Page",
+            content="New content",
+            description="",
+            tags=[],
+            editor="markdown",
+            locale="en",
         )
 
     @patch("wikijs_mcp.server.WikiJSConfig.load_config")
@@ -1285,6 +1336,12 @@ class TestWikiJSMCPServer:
             "title": "My Wiki",
             "description": "A wiki",
             "host": "https://wiki.example.com",
+            "localization": {
+                "locale": "zh",
+                "autoUpdate": True,
+                "namespacing": False,
+                "namespaces": ["zh"],
+            },
         }
         mock_client_class.return_value = mock_client_instance
 
@@ -1295,6 +1352,9 @@ class TestWikiJSMCPServer:
         assert "My Wiki" in response_text
         assert "A wiki" in response_text
         assert "https://wiki.example.com" in response_text
+        assert "Default Locale:** zh" in response_text
+        assert "Multilingual Namespacing:** Disabled" in response_text
+        assert "Locale Namespaces:** zh" in response_text
 
     @patch("wikijs_mcp.server.WikiJSConfig.load_config")
     @patch("wikijs_mcp.server.WikiJSClient")
