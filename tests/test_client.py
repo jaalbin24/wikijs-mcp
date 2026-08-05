@@ -999,6 +999,41 @@ class TestWikiJSClient:
 
         assert result == []
 
+    # --- get_localization_config tests ---
+
+    async def test_get_localization_config_success(self, mock_wiki_config):
+        """Test successful localization config retrieval."""
+        client = WikiJSClient(mock_wiki_config)
+
+        localization_response = {
+            "localization": {
+                "config": {
+                    "locale": "zh",
+                    "autoUpdate": True,
+                    "namespacing": False,
+                    "namespaces": ["zh"],
+                }
+            }
+        }
+
+        client._execute_query = AsyncMock(return_value=localization_response)
+        result = await client.get_localization_config()
+
+        assert result == localization_response["localization"]["config"]
+        query = client._execute_query.call_args[0][0]
+        assert "query GetLocalizationConfig" in query
+        assert "localization" in query
+        assert "namespacing" in query
+
+    async def test_get_localization_config_empty(self, mock_wiki_config):
+        """Test localization config retrieval with an empty response."""
+        client = WikiJSClient(mock_wiki_config)
+
+        client._execute_query = AsyncMock(return_value={})
+        result = await client.get_localization_config()
+
+        assert result == {}
+
     # --- get_site_info tests ---
 
     async def test_get_site_info_success(self, mock_wiki_config):
@@ -1012,7 +1047,15 @@ class TestWikiJSClient:
                     "description": "A wiki",
                     "host": "https://wiki.example.com",
                 }
-            }
+            },
+            "localization": {
+                "config": {
+                    "locale": "zh",
+                    "autoUpdate": True,
+                    "namespacing": False,
+                    "namespaces": ["zh"],
+                }
+            },
         }
 
         client._execute_query = AsyncMock(return_value=site_response)
@@ -1021,6 +1064,7 @@ class TestWikiJSClient:
         assert result["title"] == "My Wiki"
         assert result["description"] == "A wiki"
         assert result["host"] == "https://wiki.example.com"
+        assert result["localization"] == site_response["localization"]["config"]
 
     async def test_get_site_info_empty(self, mock_wiki_config):
         """Test get_site_info with empty response."""
@@ -1140,6 +1184,7 @@ class TestWikiJSClient:
             ("list_pages", []),
             ("get_page_tree", []),
             ("list_tags", []),
+            ("get_localization_config", []),
             ("get_site_info", []),
             ("get_page_history", [42]),
             ("get_page_version", [42, 1]),

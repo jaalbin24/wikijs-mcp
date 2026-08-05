@@ -33,7 +33,9 @@ class WikiJSMCPServer:
                 "parameter — prefer this over full content replacement for small changes.\n"
                 "- Use metadata_only=True on wiki_get_page to fetch page info without content, "
                 "saving context tokens during exploration.\n"
-                "- Use wiki_list_tags to discover available tags, then filter wiki_list_pages by tag."
+                "- Use wiki_list_tags to discover available tags, then filter wiki_list_pages by tag.\n"
+                "- When creating a page without an explicit locale, the site's configured default "
+                "locale is used automatically."
             ),
         )
         self._setup_tools()
@@ -235,7 +237,7 @@ class WikiJSMCPServer:
                 return response
 
         @self.app.tool(
-            description="Create a new wiki page at the specified path. Content should match the wiki's editor format (usually markdown). The page path determines its location in the wiki hierarchy (e.g., 'team/onboarding' creates under 'team')."
+            description="Create a new wiki page at the specified path. Content should match the wiki's editor format (usually markdown). When locale is omitted, the site's configured default locale is used automatically. The page path determines its location in the wiki hierarchy (e.g., 'team/onboarding' creates under 'team')."
         )
         async def wiki_create_page(
             path: str,
@@ -244,7 +246,7 @@ class WikiJSMCPServer:
             description: str = "",
             tags: list[str] = None,
             editor: str = "markdown",
-            locale: str = "en",
+            locale: str | None = None,
         ) -> str:
             """Create a new wiki page.
 
@@ -255,12 +257,16 @@ class WikiJSMCPServer:
                 description: Page description (optional)
                 tags: Page tags (optional)
                 editor: Page editor format (default: 'markdown')
-                locale: Page locale (default: 'en')
+                locale: Page locale. Uses the site's configured default when omitted.
             """
             if tags is None:
                 tags = []
 
             async with WikiJSClient(self.config) as client:
+                if locale is None:
+                    localization = await client.get_localization_config()
+                    locale = localization.get("locale") or "en"
+
                 result = await client.create_page(
                     path=path,
                     title=title,
@@ -459,13 +465,10 @@ class WikiJSMCPServer:
                 return response
 
         @self.app.tool(
-            description="Get Wiki.js site metadata including title, description, and host URL. Useful for understanding which wiki instance you are connected to."
+            description="Get Wiki.js site metadata and localization settings, including the default locale and multilingual namespacing configuration. Useful for understanding which wiki instance you are connected to and which locale page operations should use."
         )
         async def wiki_get_site_info() -> str:
-            """Get site metadata.
-
-            Returns the wiki's title, description, and host URL.
-            """
+            """Get site metadata and localization settings."""
             async with WikiJSClient(self.config) as client:
                 config = await client.get_site_info()
 
@@ -479,6 +482,17 @@ class WikiJSMCPServer:
                     response += f"**Description:** {config['description']}\n"
                 if config.get("host"):
                     response += f"**Host:** {config['host']}\n"
+
+                localization = config.get("localization", {})
+                if localization.get("locale"):
+                    response += f"**Default Locale:** {localization['locale']}\n"
+                if "namespacing" in localization:
+                    namespacing = (
+                        "Enabled" if localization["namespacing"] else "Disabled"
+                    )
+                    response += f"**Multilingual Namespacing:** {namespacing}\n"
+                if localization.get("namespaces"):
+                    response += f"**Locale Namespaces:** {', '.join(localization['namespaces'])}\n"
 
                 return response
 
