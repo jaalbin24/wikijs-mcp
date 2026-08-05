@@ -243,15 +243,19 @@ class WikiJSMCPServer:
             content: str,
             description: str = "",
             tags: list[str] = None,
+            editor: str = "markdown",
+            locale: str = "en",
         ) -> str:
             """Create a new wiki page.
 
             Args:
                 path: Page path (e.g., 'docs/new-feature')
                 title: Page title
-                content: Page content in markdown
+                content: Page content matching the selected editor format
                 description: Page description (optional)
                 tags: Page tags (optional)
+                editor: Page editor format (default: 'markdown')
+                locale: Page locale (default: 'en')
             """
             if tags is None:
                 tags = []
@@ -263,6 +267,8 @@ class WikiJSMCPServer:
                     content=content,
                     description=description,
                     tags=tags,
+                    editor=editor,
+                    locale=locale,
                 )
 
                 page_info = result.get("page", {})

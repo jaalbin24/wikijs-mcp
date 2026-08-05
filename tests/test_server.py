@@ -523,6 +523,47 @@ class TestWikiJSMCPServer:
             content="New content",
             description="Test description",
             tags=["test", "example"],
+            editor="markdown",
+            locale="en",
+        )
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_create_page_with_custom_editor_and_locale(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test creating a page with a custom editor and locale."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.create_page.return_value = {
+            "page": {"id": 1, "title": "Page Française", "path": "/fr/nouvelle"}
+        }
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool(
+            "wiki_create_page",
+            {
+                "path": "/fr/nouvelle",
+                "title": "Page Française",
+                "content": "= Contenu",
+                "editor": "asciidoc",
+                "locale": "fr",
+            },
+        )
+
+        assert "Successfully created page" in get_tool_response_text(result)
+        mock_client_instance.create_page.assert_called_once_with(
+            path="/fr/nouvelle",
+            title="Page Française",
+            content="= Contenu",
+            description="",
+            tags=[],
+            editor="asciidoc",
+            locale="fr",
         )
 
     @patch("wikijs_mcp.server.WikiJSConfig.load_config")
