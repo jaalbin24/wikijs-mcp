@@ -503,8 +503,26 @@ class WikiJSClient:
         result = await self._execute_query(graphql_query)
         return result.get("pages", {}).get("tags", [])
 
+    async def get_localization_config(self) -> dict[str, Any]:
+        """Get the site's localization configuration."""
+        graphql_query = """
+        query GetLocalizationConfig {
+            localization {
+                config {
+                    locale
+                    autoUpdate
+                    namespacing
+                    namespaces
+                }
+            }
+        }
+        """
+
+        result = await self._execute_query(graphql_query)
+        return result.get("localization", {}).get("config", {})
+
     async def get_site_info(self) -> dict[str, Any]:
-        """Get site configuration info."""
+        """Get site and localization configuration info."""
         graphql_query = """
         query GetSiteConfig {
             site {
@@ -514,11 +532,25 @@ class WikiJSClient:
                     host
                 }
             }
+            localization {
+                config {
+                    locale
+                    autoUpdate
+                    namespacing
+                    namespaces
+                }
+            }
         }
         """
 
         result = await self._execute_query(graphql_query)
-        return result.get("site", {}).get("config", {})
+        site_config = result.get("site", {}).get("config", {})
+        localization_config = result.get("localization", {}).get("config", {})
+
+        if localization_config:
+            site_config["localization"] = localization_config
+
+        return site_config
 
     async def get_page_history(
         self,
