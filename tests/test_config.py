@@ -5,7 +5,11 @@ from unittest.mock import patch
 
 import pytest
 
-from wikijs_mcp.config import WikiJSConfig
+from wikijs_mcp.config import (
+    DEFAULT_MCP_ALLOWED_HOSTS,
+    DEFAULT_MCP_ALLOWED_ORIGINS,
+    WikiJSConfig,
+)
 
 
 @pytest.mark.unit
@@ -20,6 +24,12 @@ class TestWikiJSConfig:
         assert config.api_key == ""
         assert config.graphql_endpoint == "/graphql"
         assert config.debug is False
+        assert config.read_only is False
+        assert config.mcp_host == "127.0.0.1"
+        assert config.mcp_port == 8000
+        assert config.mcp_path == "/mcp"
+        assert config.mcp_allowed_hosts == DEFAULT_MCP_ALLOWED_HOSTS
+        assert config.mcp_allowed_origins == DEFAULT_MCP_ALLOWED_ORIGINS
 
     def test_init_with_values(self):
         """Test WikiJSConfig initialization with specific values."""
@@ -28,12 +38,36 @@ class TestWikiJSConfig:
             api_key="test-key-123",
             graphql_endpoint="/api/graphql",
             debug=True,
+            read_only=True,
+            mcp_host="localhost",
+            mcp_port=9000,
+            mcp_path="/wiki-mcp",
+            mcp_allowed_hosts=["127.0.0.1:*", "localhost:*", "mcp.example.com"],
+            mcp_allowed_origins=[
+                "http://127.0.0.1:*",
+                "http://localhost:*",
+                "https://mcp.example.com",
+            ],
         )
 
         assert config.url == "https://test-wiki.com"
         assert config.api_key == "test-key-123"
         assert config.graphql_endpoint == "/api/graphql"
         assert config.debug is True
+        assert config.read_only is True
+        assert config.mcp_host == "localhost"
+        assert config.mcp_port == 9000
+        assert config.mcp_path == "/wiki-mcp"
+        assert config.mcp_allowed_hosts == [
+            "127.0.0.1:*",
+            "localhost:*",
+            "mcp.example.com",
+        ]
+        assert config.mcp_allowed_origins == [
+            "http://127.0.0.1:*",
+            "http://localhost:*",
+            "https://mcp.example.com",
+        ]
 
     def test_graphql_url_property(self):
         """Test graphql_url property construction."""
@@ -89,6 +123,12 @@ class TestWikiJSConfig:
             "WIKIJS_URL": "https://test-wiki.com",
             "WIKIJS_API_KEY": "test-key-123",
             "WIKIJS_GRAPHQL_ENDPOINT": "/api/graphql",
+            "WIKIJS_READ_ONLY": "true",
+            "MCP_HOST": "localhost",
+            "MCP_PORT": "9000",
+            "MCP_PATH": "/wiki-mcp",
+            "MCP_ALLOWED_HOSTS": "127.0.0.1:*, localhost:*, mcp.example.com",
+            "MCP_ALLOWED_ORIGINS": "http://127.0.0.1:*, http://localhost:*, https://mcp.example.com",
             "DEBUG": "true",
         }
 
@@ -99,6 +139,20 @@ class TestWikiJSConfig:
         assert config.api_key == "test-key-123"
         assert config.graphql_endpoint == "/api/graphql"
         assert config.debug is True
+        assert config.read_only is True
+        assert config.mcp_host == "localhost"
+        assert config.mcp_port == 9000
+        assert config.mcp_path == "/wiki-mcp"
+        assert config.mcp_allowed_hosts == [
+            "127.0.0.1:*",
+            "localhost:*",
+            "mcp.example.com",
+        ]
+        assert config.mcp_allowed_origins == [
+            "http://127.0.0.1:*",
+            "http://localhost:*",
+            "https://mcp.example.com",
+        ]
 
     def test_load_config_with_defaults(self):
         """Test that load_config uses defaults for missing env vars."""
@@ -111,6 +165,42 @@ class TestWikiJSConfig:
         assert config.api_key == "test-key"
         assert config.graphql_endpoint == "/graphql"
         assert config.debug is False
+        assert config.read_only is False
+        assert config.mcp_host == "127.0.0.1"
+        assert config.mcp_port == 8000
+        assert config.mcp_path == "/mcp"
+        assert config.mcp_allowed_hosts == DEFAULT_MCP_ALLOWED_HOSTS
+        assert config.mcp_allowed_origins == DEFAULT_MCP_ALLOWED_ORIGINS
+
+    def test_allowed_hosts_empty_entries_are_ignored(self):
+        """Test allowed host parsing ignores whitespace-only entries."""
+        env_vars = {
+            "MCP_ALLOWED_HOSTS": " 127.0.0.1:* , , localhost:* ,, mcp.example.com ",
+        }
+
+        with patch.dict(os.environ, env_vars):
+            config = WikiJSConfig.load_config()
+
+        assert config.mcp_allowed_hosts == [
+            "127.0.0.1:*",
+            "localhost:*",
+            "mcp.example.com",
+        ]
+
+    def test_allowed_origins_empty_entries_are_ignored(self):
+        """Test allowed origin parsing ignores whitespace-only entries."""
+        env_vars = {
+            "MCP_ALLOWED_ORIGINS": " http://127.0.0.1:* , , http://localhost:* ,, https://mcp.example.com ",
+        }
+
+        with patch.dict(os.environ, env_vars):
+            config = WikiJSConfig.load_config()
+
+        assert config.mcp_allowed_origins == [
+            "http://127.0.0.1:*",
+            "http://localhost:*",
+            "https://mcp.example.com",
+        ]
 
     @pytest.mark.parametrize(
         "debug_value,expected",
@@ -137,3 +227,31 @@ class TestWikiJSConfig:
             config = WikiJSConfig.load_config()
 
         assert config.debug is expected
+
+    @pytest.mark.parametrize(
+        "read_only_value,expected",
+        [
+            ("true", True),
+            ("TRUE", True),
+            ("1", True),
+            ("yes", True),
+            ("on", True),
+            ("false", False),
+            ("0", False),
+            ("no", False),
+            ("", False),
+            ("invalid", False),
+        ],
+    )
+    def test_read_only_flag_parsing(self, read_only_value, expected):
+        """Test read-only flag parsing from environment."""
+        env_vars = {
+            "WIKIJS_URL": "https://test.com",
+            "WIKIJS_API_KEY": "test-key",
+            "WIKIJS_READ_ONLY": read_only_value,
+        }
+
+        with patch.dict(os.environ, env_vars):
+            config = WikiJSConfig.load_config()
+
+        assert config.read_only is expected

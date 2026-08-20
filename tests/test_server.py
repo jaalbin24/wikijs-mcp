@@ -1,11 +1,17 @@
 """Tests for MCP server functionality."""
 
 import asyncio
+import os
+import socket
+import subprocess
+import sys
+import time
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
+import httpx
 import pytest
 
-from wikijs_mcp.server import WikiJSMCPServer
+from wikijs_mcp.server import READ_ONLY_ERROR, WikiJSMCPServer, build_arg_parser
 
 
 def get_tool_response_text(result):
@@ -18,6 +24,103 @@ def get_tool_response_text(result):
         return content[0].text
     else:
         return result[0].text
+
+
+def get_free_port() -> int:
+    """Return an available local TCP port for subprocess HTTP tests."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def start_http_server(port: int, extra_env: dict[str, str] | None = None):
+    """Start the CLI in Streamable HTTP mode for regression tests."""
+    env = os.environ.copy()
+    env.update(
+        {
+            "WIKIJS_URL": "https://wiki.example.com",
+            "WIKIJS_API_KEY": "dummy-key",
+            "MCP_HOST": "127.0.0.1",
+            "MCP_PORT": str(port),
+            "MCP_PATH": "/mcp",
+        }
+    )
+    if extra_env:
+        env.update(extra_env)
+
+    return subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "from wikijs_mcp.server import main; main()",
+            "--transport",
+            "streamable-http",
+        ],
+        cwd=os.getcwd(),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
+def post_initialize(port: int, host: str, origin: str | None = None) -> httpx.Response:
+    """Send a minimal MCP initialize request to the local HTTP server."""
+    headers = {
+        "accept": "application/json, text/event-stream",
+        "content-type": "application/json",
+        "host": host,
+    }
+    if origin:
+        headers["origin"] = origin
+
+    return httpx.post(
+        f"http://127.0.0.1:{port}/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "pytest", "version": "0.0.0"},
+            },
+        },
+        headers=headers,
+        timeout=5.0,
+    )
+
+
+def wait_for_initialize_response(
+    proc: subprocess.Popen, port: int, host: str, origin: str | None = None
+) -> httpx.Response:
+    """Wait until the Streamable HTTP server returns an initialize response."""
+    last_error = None
+    for _ in range(40):
+        if proc.poll() is not None:
+            stdout, stderr = proc.communicate()
+            raise RuntimeError(
+                f"HTTP server exited early: {proc.returncode}, {stdout}, {stderr}"
+            )
+        try:
+            return post_initialize(port, host, origin)
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            last_error = exc
+            time.sleep(0.25)
+
+    raise RuntimeError(f"HTTP server did not respond: {last_error!r}")
+
+
+def stop_http_server(proc: subprocess.Popen) -> tuple[str, str]:
+    """Terminate a subprocess HTTP server and return captured output."""
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+    return proc.communicate()
 
 
 @pytest.mark.integration
@@ -34,6 +137,60 @@ class TestWikiJSMCPServer:
         assert server.config == mock_wiki_config
         assert server.app is not None
         mock_load_config.assert_called_once()
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    def test_init_uses_http_config(self, mock_load_config, mock_wiki_config):
+        """Test Streamable HTTP settings are applied to FastMCP."""
+        config = mock_wiki_config.model_copy(
+            update={
+                "mcp_host": "localhost",
+                "mcp_port": 9000,
+                "mcp_path": "/wiki-mcp",
+            }
+        )
+        mock_load_config.return_value = config
+
+        server = WikiJSMCPServer()
+
+        assert server.app.settings.host == "localhost"
+        assert server.app.settings.port == 9000
+        assert server.app.settings.streamable_http_path == "/wiki-mcp"
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    def test_init_uses_transport_security_config(
+        self, mock_load_config, mock_wiki_config
+    ):
+        """Test DNS rebinding protection and allowlists are configured."""
+        config = mock_wiki_config.model_copy(
+            update={
+                "mcp_allowed_hosts": [
+                    "127.0.0.1:*",
+                    "localhost:*",
+                    "mcp.example.com",
+                ],
+                "mcp_allowed_origins": [
+                    "http://127.0.0.1:*",
+                    "http://localhost:*",
+                    "https://mcp.example.com",
+                ],
+            }
+        )
+        mock_load_config.return_value = config
+
+        server = WikiJSMCPServer()
+        transport_security = server.app.settings.transport_security
+
+        assert transport_security.enable_dns_rebinding_protection is True
+        assert transport_security.allowed_hosts == [
+            "127.0.0.1:*",
+            "localhost:*",
+            "mcp.example.com",
+        ]
+        assert transport_security.allowed_origins == [
+            "http://127.0.0.1:*",
+            "http://localhost:*",
+            "https://mcp.example.com",
+        ]
 
     @patch("wikijs_mcp.server.WikiJSConfig.load_config")
     async def test_list_tools(self, mock_load_config, mock_wiki_config):
@@ -616,6 +773,57 @@ class TestWikiJSMCPServer:
             editor="markdown",
             locale="en",
         )
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_read_only_blocks_create_before_client(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test read-only mode blocks mutations before external calls."""
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        mock_load_config.return_value = mock_wiki_config.model_copy(
+            update={"read_only": True}
+        )
+        server = WikiJSMCPServer()
+
+        with pytest.raises(ToolError, match="read-only mode is enabled"):
+            await server.app.call_tool(
+                "wiki_create_page",
+                {"path": "docs/new", "title": "New", "content": "content"},
+            )
+
+        mock_client_class.assert_not_called()
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_read_only_blocks_mutation_tools(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test read-only mode blocks all mutation tools."""
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        mock_load_config.return_value = mock_wiki_config.model_copy(
+            update={"read_only": True}
+        )
+        server = WikiJSMCPServer()
+
+        mutation_calls = [
+            ("wiki_update_page", {"id": 1, "content": "updated"}),
+            ("wiki_move_page", {"id": 1, "destination_path": "docs/moved"}),
+            ("wiki_delete_page", {"id": 1}),
+        ]
+
+        for tool_name, arguments in mutation_calls:
+            with pytest.raises(ToolError, match="read-only mode is enabled"):
+                await server.app.call_tool(tool_name, arguments)
+
+        mock_client_class.assert_not_called()
+
+    def test_read_only_error_message(self):
+        """Test read-only errors are clear for MCP clients."""
+        assert "WIKIJS_READ_ONLY=true" in READ_ONLY_ERROR
+        assert "Mutation tools are disabled" in READ_ONLY_ERROR
 
     @patch("wikijs_mcp.server.WikiJSConfig.load_config")
     @patch("wikijs_mcp.server.WikiJSClient")
@@ -1520,6 +1728,109 @@ class TestWikiJSMCPServer:
 
     @patch("wikijs_mcp.server.WikiJSConfig.load_config")
     @patch("wikijs_mcp.config.WikiJSConfig.validate_config")
+    async def test_run_streamable_http(
+        self, mock_validate, mock_load_config, mock_wiki_config
+    ):
+        """Test run_streamable_http method."""
+        mock_load_config.return_value = mock_wiki_config
+
+        server = WikiJSMCPServer()
+
+        with patch.object(server.app, "run_streamable_http_async") as mock_run:
+            await server.run_streamable_http()
+            mock_run.assert_called_once()
+            mock_validate.assert_called_once()
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    async def test_run_transport_selection(self, mock_load_config, mock_wiki_config):
+        """Test transport selection dispatches to the selected runner."""
+        mock_load_config.return_value = mock_wiki_config
+        server = WikiJSMCPServer()
+
+        with (
+            patch.object(server, "run_stdio", new_callable=AsyncMock) as mock_stdio,
+            patch.object(
+                server, "run_streamable_http", new_callable=AsyncMock
+            ) as mock_http,
+        ):
+            await server.run("stdio")
+            mock_stdio.assert_awaited_once()
+            mock_http.assert_not_called()
+
+        with (
+            patch.object(server, "run_stdio", new_callable=AsyncMock) as mock_stdio,
+            patch.object(
+                server, "run_streamable_http", new_callable=AsyncMock
+            ) as mock_http,
+        ):
+            await server.run("streamable-http")
+            mock_http.assert_awaited_once()
+            mock_stdio.assert_not_called()
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    async def test_run_invalid_transport(self, mock_load_config, mock_wiki_config):
+        """Test invalid transport values are rejected."""
+        mock_load_config.return_value = mock_wiki_config
+        server = WikiJSMCPServer()
+
+        with pytest.raises(ValueError, match="Invalid transport"):
+            await server.run("http")
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    def test_streamable_http_app_initializes(self, mock_load_config, mock_wiki_config):
+        """Test Streamable HTTP ASGI app can initialize."""
+        mock_load_config.return_value = mock_wiki_config
+        server = WikiJSMCPServer()
+
+        app = server.streamable_http_app()
+
+        assert app is not None
+
+    def test_http_rejects_unconfigured_public_host(self):
+        """Test default DNS rebinding protection rejects public Host values."""
+        port = get_free_port()
+        proc = start_http_server(port)
+
+        try:
+            response = wait_for_initialize_response(
+                proc, port, host="mcp.mylifeblike.com"
+            )
+        finally:
+            stdout, stderr = stop_http_server(proc)
+
+        assert response.status_code == 421
+        assert "Invalid Host header" in response.text
+        assert "dummy-key" not in stdout
+        assert "dummy-key" not in stderr
+
+    def test_http_accepts_configured_public_host_and_origin(self):
+        """Test configured public Host and Origin values are accepted."""
+        port = get_free_port()
+        proc = start_http_server(
+            port,
+            extra_env={
+                "MCP_ALLOWED_HOSTS": "127.0.0.1:*,localhost:*,mcp.mylifeblike.com",
+                "MCP_ALLOWED_ORIGINS": "http://127.0.0.1:*,http://localhost:*,https://mcp.mylifeblike.com",
+            },
+        )
+
+        try:
+            response = wait_for_initialize_response(
+                proc,
+                port,
+                host="mcp.mylifeblike.com",
+                origin="https://mcp.mylifeblike.com",
+            )
+        finally:
+            stdout, stderr = stop_http_server(proc)
+
+        assert response.status_code == 200
+        assert response.json()["result"]["serverInfo"]["name"] == "wikijs-mcp-server"
+        assert "dummy-key" not in stdout
+        assert "dummy-key" not in stderr
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.config.WikiJSConfig.validate_config")
     async def test_run_stdio_validation_error(
         self, mock_validate, mock_load_config, mock_wiki_config
     ):
@@ -1549,17 +1860,35 @@ class TestMainFunction:
 
         await _async_main()
 
-        mock_server.run_stdio.assert_called_once()
+        mock_server.run.assert_called_once_with("stdio")
 
-    @patch("sys.argv", ["wikijs-mcp", "--help"])
-    @patch("builtins.print")
-    async def test_main_help_arg(self, mock_print):
-        """Test main function with --help argument."""
+    @patch("wikijs_mcp.server.WikiJSMCPServer")
+    @patch("logging.basicConfig")
+    @patch("sys.argv", ["wikijs-mcp", "--transport", "streamable-http"])
+    async def test_main_runs_streamable_http(self, mock_logging, mock_server_class):
+        """Test main function runs Streamable HTTP server."""
         from wikijs_mcp.server import _async_main
+
+        mock_server = AsyncMock()
+        mock_server_class.return_value = mock_server
 
         await _async_main()
 
-        mock_print.assert_called()
-        print_calls = [call[0][0] for call in mock_print.call_args_list]
-        assert any("WikiJS MCP Server" in call for call in print_calls)
-        assert any("Usage:" in call for call in print_calls)
+        mock_server.run.assert_called_once_with("streamable-http")
+
+    def test_arg_parser_defaults_to_stdio(self):
+        """Test CLI parser defaults to stdio."""
+        args = build_arg_parser().parse_args([])
+
+        assert args.transport == "stdio"
+
+    def test_arg_parser_accepts_streamable_http(self):
+        """Test CLI parser accepts Streamable HTTP."""
+        args = build_arg_parser().parse_args(["--transport", "streamable-http"])
+
+        assert args.transport == "streamable-http"
+
+    def test_arg_parser_rejects_invalid_transport(self):
+        """Test CLI parser rejects invalid transports."""
+        with pytest.raises(SystemExit):
+            build_arg_parser().parse_args(["--transport", "http"])

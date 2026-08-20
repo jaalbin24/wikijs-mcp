@@ -1,14 +1,40 @@
 """WikiJS MCP Server."""
 
+import argparse
 import asyncio
 import logging
+from typing import Literal
 
-from mcp.server import FastMCP
+from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.transport_security import TransportSecuritySettings
 
 from .client import WikiJSClient
 from .config import WikiJSConfig
 
 logger = logging.getLogger(__name__)
+
+Transport = Literal["stdio", "streamable-http"]
+VALID_TRANSPORTS = ("stdio", "streamable-http")
+READ_ONLY_ERROR = (
+    "Wiki.js read-only mode is enabled. Mutation tools are disabled by "
+    "WIKIJS_READ_ONLY=true."
+)
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    """Build the command-line parser for the wikijs-mcp command."""
+    parser = argparse.ArgumentParser(
+        prog="wikijs-mcp",
+        description="Wiki.js MCP server with stdio and Streamable HTTP transports.",
+    )
+    parser.add_argument(
+        "--transport",
+        choices=VALID_TRANSPORTS,
+        default="stdio",
+        help="MCP transport to use. Defaults to stdio.",
+    )
+    return parser
 
 
 class WikiJSMCPServer:
@@ -18,6 +44,16 @@ class WikiJSMCPServer:
         self.config = WikiJSConfig.load_config()
         self.app = FastMCP(
             name="wikijs-mcp-server",
+            host=self.config.mcp_host,
+            port=self.config.mcp_port,
+            streamable_http_path=self.config.mcp_path,
+            stateless_http=True,
+            json_response=True,
+            transport_security=TransportSecuritySettings(
+                enable_dns_rebinding_protection=True,
+                allowed_hosts=self.config.mcp_allowed_hosts,
+                allowed_origins=self.config.mcp_allowed_origins,
+            ),
             instructions=(
                 "Wiki.js MCP server — workflow guidance:\n"
                 "- Start by calling wiki_list_pages or wiki_get_tree to orient yourself.\n"
@@ -39,6 +75,11 @@ class WikiJSMCPServer:
             ),
         )
         self._setup_tools()
+
+    def _ensure_writable(self) -> None:
+        """Reject mutation tools when read-only mode is enabled."""
+        if self.config.read_only:
+            raise ToolError(READ_ONLY_ERROR)
 
     def _setup_tools(self):
         """Setup MCP tools."""
@@ -259,6 +300,8 @@ class WikiJSMCPServer:
                 editor: Page editor format (default: 'markdown')
                 locale: Page locale. Uses the site's configured default when omitted.
             """
+            self._ensure_writable()
+
             if tags is None:
                 tags = []
 
@@ -315,6 +358,8 @@ class WikiJSMCPServer:
                 description: New page description (optional)
                 tags: New page tags (optional)
             """
+            self._ensure_writable()
+
             if content is not None and edits is not None:
                 raise ValueError(
                     "Cannot specify both 'content' and 'edits' — use one or the other"
@@ -387,6 +432,8 @@ class WikiJSMCPServer:
             Args:
                 id: Page ID to delete
             """
+            self._ensure_writable()
+
             async with WikiJSClient(self.config) as client:
                 result = await client.delete_page(page_id=id)
 
@@ -410,6 +457,8 @@ class WikiJSMCPServer:
                 destination_path: New path for the page (e.g., 'docs/moved-page')
                 destination_locale: New locale for the page (default: 'en')
             """
+            self._ensure_writable()
+
             async with WikiJSClient(self.config) as client:
                 # Get the current page info for the response
                 current_page = await client.get_page_by_id(id)
@@ -578,25 +627,46 @@ class WikiJSMCPServer:
             logger.error(f"Server failed to start: {str(e)}")
             raise
 
+    async def run_streamable_http(self):
+        """Run the MCP server over Streamable HTTP."""
+        try:
+            self.config.validate_config()
+            logger.info(
+                "Starting WikiJS MCP Server for %s over Streamable HTTP at http://%s:%s%s",
+                self.config.url,
+                self.config.mcp_host,
+                self.config.mcp_port,
+                self.config.mcp_path,
+            )
+            await self.app.run_streamable_http_async()
+        except Exception as e:
+            logger.error(f"Server failed to start: {str(e)}")
+            raise
+
+    async def run(self, transport: Transport = "stdio"):
+        """Run the MCP server with the selected transport."""
+        if transport == "stdio":
+            await self.run_stdio()
+        elif transport == "streamable-http":
+            await self.run_streamable_http()
+        else:
+            raise ValueError(
+                f"Invalid transport '{transport}'. Must be one of: {', '.join(VALID_TRANSPORTS)}"
+            )
+
+    def streamable_http_app(self):
+        """Return the SDK-provided Streamable HTTP ASGI app."""
+        return self.app.streamable_http_app()
+
 
 async def _async_main():
     """Async entry point."""
-    import sys
-
     logging.basicConfig(level=logging.INFO)
 
-    if len(sys.argv) > 1 and sys.argv[1] == "--help":
-        print("WikiJS MCP Server")
-        print("Usage:")
-        print("  wikijs-mcp")
-        print("  wikijs-mcp --help")
-        print("")
-        print("Runs the MCP server over stdio for use with Claude Code")
-        print("and other MCP clients.")
-        return
+    args = build_arg_parser().parse_args()
 
     server = WikiJSMCPServer()
-    await server.run_stdio()
+    await server.run(args.transport)
 
 
 def main():
