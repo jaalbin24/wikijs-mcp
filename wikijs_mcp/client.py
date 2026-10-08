@@ -178,6 +178,24 @@ class WikiJSClient:
         self._resolved_locale = site_locale or FALLBACK_LOCALE
         return self._resolved_locale
 
+    async def _execute_query_optional(
+        self, query: str, variables: dict[str, Any] | None = None
+    ) -> dict[str, Any] | None:
+        """Execute a GraphQL query, returning ``None`` on missing resources.
+
+        Wiki.js reports missing pages (e.g. ``pages.single`` for a deleted
+        page) as a GraphQL error with code ``6003`` / "does not exist" instead
+        of a ``null`` result. Read helpers that document ``None`` for missing
+        data route through this method so the documented contract holds.
+        """
+        try:
+            return await self._execute_query(query, variables)
+        except Exception as exc:  # noqa: BLE001
+            message = str(exc).lower()
+            if "does not exist" in message or "not found" in message or "6003" in message:
+                return None
+            raise
+
     async def _execute_query(
         self, query: str, variables: dict[str, Any] | None = None
     ) -> dict[str, Any]:
@@ -267,9 +285,11 @@ class WikiJSClient:
         """
 
         resolved_locale = await self._resolve_locale(locale)
-        result = await self._execute_query(
+        result = await self._execute_query_optional(
             graphql_query, {"path": path, "locale": resolved_locale}
         )
+        if result is None:
+            return None
         return result.get("pages", {}).get("singleByPath")
 
     async def get_page_by_id(
@@ -291,7 +311,9 @@ class WikiJSClient:
         }}
         """
 
-        result = await self._execute_query(graphql_query, {"id": page_id})
+        result = await self._execute_query_optional(graphql_query, {"id": page_id})
+        if result is None:
+            return None
         return result.get("pages", {}).get("single")
 
     async def list_pages(

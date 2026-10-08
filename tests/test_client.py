@@ -95,6 +95,68 @@ class TestWikiJSClient:
         with pytest.raises(Exception, match="API request failed: 401"):
             await client._execute_query("query { test }")
 
+    async def test_execute_query_optional_returns_none_on_page_not_found(
+        self, mock_wiki_config
+    ):
+        """_execute_query_optional maps Wiki.js PageNotFound (6003) to None."""
+        client = WikiJSClient(mock_wiki_config)
+
+        error_response = {
+            "errors": [
+                {
+                    "message": "This page does not exist.",
+                    "extensions": {"exception": {"code": 6003}},
+                }
+            ],
+            "data": None,
+        }
+        mock_response = Mock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = error_response
+        client.client.post = AsyncMock(return_value=mock_response)
+
+        result = await client._execute_query_optional(
+            "query GetPageById($id: Int!) { pages { single(id: $id) { id } } }",
+            {"id": 99999},
+        )
+        assert result is None
+
+    async def test_execute_query_optional_propagates_other_errors(
+        self, mock_wiki_config
+    ):
+        """Non-404 GraphQL errors still raise through _execute_query_optional."""
+        client = WikiJSClient(mock_wiki_config)
+
+        error_response = {"errors": [{"message": "Invalid query"}], "data": None}
+        mock_response = Mock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = error_response
+        client.client.post = AsyncMock(return_value=mock_response)
+
+        with pytest.raises(Exception, match="GraphQL query failed"):
+            await client._execute_query_optional("invalid query")
+
+    async def test_get_page_by_id_not_found_maps_to_none(self, mock_wiki_config):
+        """get_page_by_id returns None for missing pages instead of raising."""
+        client = WikiJSClient(mock_wiki_config)
+
+        error_response = {
+            "errors": [
+                {
+                    "message": "This page does not exist.",
+                    "extensions": {"exception": {"code": 6003}},
+                }
+            ],
+            "data": None,
+        }
+        mock_response = Mock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = error_response
+        client.client.post = AsyncMock(return_value=mock_response)
+
+        result = await client.get_page_by_id(99999)
+        assert result is None
+
     async def test_search_pages_success(self, mock_wiki_config):
         """Test successful page search with new GraphQL schema."""
         client = WikiJSClient(mock_wiki_config)
