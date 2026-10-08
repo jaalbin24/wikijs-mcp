@@ -150,7 +150,13 @@ def sample_site_config():
 @pytest.fixture(autouse=True)
 def clean_env():
     """Clean environment variables before each test."""
-    env_vars = ["WIKIJS_URL", "WIKIJS_API_KEY", "WIKIJS_GRAPHQL_ENDPOINT", "DEBUG"]
+    env_vars = [
+        "WIKIJS_URL",
+        "WIKIJS_API_KEY",
+        "WIKIJS_GRAPHQL_ENDPOINT",
+        "WIKIJS_DEFAULT_LOCALE",
+        "DEBUG",
+    ]
 
     original_values = {}
     for var in env_vars:
