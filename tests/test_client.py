@@ -128,7 +128,7 @@ class TestWikiJSClient:
         # Verify correct query and variables were used with new schema
         call_args = client._execute_query.call_args
         assert "SearchPages" in call_args[0][0]
-        expected_vars = {"query": "test query", "path": "", "locale": "en"}
+        expected_vars = {"query": "test query", "path": "", "locale": "de"}
         assert call_args[0][1] == expected_vars
 
     async def test_search_pages_graphql_limit_applied(self, mock_wiki_config):
@@ -209,7 +209,7 @@ class TestWikiJSClient:
         call_args = client._execute_query.call_args
         assert "GetPageByPath" in call_args[0][0]
         assert "singleByPath" in call_args[0][0]
-        assert call_args[0][1] == {"path": "docs/test-page", "locale": "en"}
+        assert call_args[0][1] == {"path": "docs/test-page", "locale": "de"}
 
     async def test_get_page_by_path_with_custom_locale(
         self, mock_wiki_config, sample_page_data
@@ -330,7 +330,7 @@ class TestWikiJSClient:
             "path": "docs",
             "parent": None,
             "mode": "ALL",
-            "locale": "en",
+            "locale": "de",
             "includeAncestors": False,
         }
         assert call_args[0][1] == expected_vars
@@ -376,7 +376,7 @@ class TestWikiJSClient:
             "path": None,
             "parent": None,
             "mode": "ALL",
-            "locale": "en",
+            "locale": "de",
             "includeAncestors": False,
         }
         assert call_args[0][1] == expected_vars
@@ -421,7 +421,7 @@ class TestWikiJSClient:
             "editor": "markdown",
             "isPublished": True,
             "isPrivate": False,
-            "locale": "en",
+            "locale": "de",
             "path": "docs/new-page",
             "tags": ["test", "new"],
             "title": "New Page",
@@ -711,7 +711,7 @@ class TestWikiJSClient:
             await client.delete_page(123)
 
     async def test_move_page_success(self, mock_wiki_config):
-        """Test moving a page successfully."""
+        """Test moving a page successfully (including post-move verification)."""
         client = WikiJSClient(mock_wiki_config)
 
         move_response = {
@@ -728,9 +728,20 @@ class TestWikiJSClient:
 
         client._execute_query = AsyncMock(return_value=move_response)
 
-        result = await client.move_page(123, "docs/new-location", "fr")
+        # The page after the successful move (used by the verification step).
+        moved_page = {
+            "id": 123,
+            "path": "docs/new-location",
+            "locale": "fr",
+            "title": "Test Page",
+        }
+        with patch.object(
+            client, "get_page_by_id", new_callable=AsyncMock, return_value=moved_page
+        ) as mock_get:
+            result = await client.move_page(123, "docs/new-location", "fr")
 
         assert result == move_response["pages"]["move"]
+        mock_get.assert_called_once_with(123)
 
         # Verify the GraphQL query was called correctly
         call_args = client._execute_query.call_args
@@ -745,7 +756,7 @@ class TestWikiJSClient:
         }
 
     async def test_move_page_with_default_locale(self, mock_wiki_config):
-        """Test moving a page with default locale."""
+        """Test moving a page with default locale (resolved, not hard-coded en)."""
         client = WikiJSClient(mock_wiki_config)
 
         move_response = {
@@ -762,14 +773,26 @@ class TestWikiJSClient:
 
         client._execute_query = AsyncMock(return_value=move_response)
 
-        result = await client.move_page(456, "docs/moved-page")
+        # The page after the move — with the resolved default locale (de).
+        moved_page = {
+            "id": 456,
+            "path": "docs/moved-page",
+            "locale": "de",
+            "title": "Moved Page",
+        }
+        with patch.object(
+            client, "get_page_by_id", new_callable=AsyncMock, return_value=moved_page
+        ) as mock_get:
+            result = await client.move_page(456, "docs/moved-page")
 
         assert result == move_response["pages"]["move"]
+        mock_get.assert_called_once_with(456)
 
-        # Verify default locale is used
+        # Verify the resolved default locale was used (site locale unknown in
+        # this test, so the fallback 'de' applies) — NOT a hard-coded 'en'.
         call_args = client._execute_query.call_args
         variables = call_args[0][1]
-        assert variables["destinationLocale"] == "en"
+        assert variables["destinationLocale"] == "de"
 
     async def test_move_page_failure(self, mock_wiki_config):
         """Test moving a page when the operation fails."""

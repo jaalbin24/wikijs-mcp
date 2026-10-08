@@ -12,6 +12,9 @@ class WikiJSConfig(BaseModel):
     api_key: str = Field(default="")
     graphql_endpoint: str = Field(default="/graphql")
     debug: bool = Field(default=False)
+    # Optional override for the locale used by default for page operations.
+    # Takes precedence over the site's primary locale. See client._resolve_locale.
+    default_locale: str | None = Field(default=None)
 
     @classmethod
     def load_config(cls) -> "WikiJSConfig":
@@ -21,6 +24,7 @@ class WikiJSConfig(BaseModel):
             api_key=os.getenv("WIKIJS_API_KEY", ""),
             graphql_endpoint=os.getenv("WIKIJS_GRAPHQL_ENDPOINT", "/graphql"),
             debug=os.getenv("DEBUG", "false").lower() == "true",
+            default_locale=os.getenv("WIKIJS_DEFAULT_LOCALE") or None,
         )
 
     @property
