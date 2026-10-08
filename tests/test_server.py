@@ -42,7 +42,7 @@ class TestWikiJSMCPServer:
         server = WikiJSMCPServer()
 
         tools = await server.app.list_tools()
-        assert len(tools) == 12  # 12 wiki tools
+        assert len(tools) == 17  # 12 original wiki tools + 5 asset tools
 
         tool_names = [tool.name for tool in tools]
         expected_names = [
@@ -58,6 +58,11 @@ class TestWikiJSMCPServer:
             "wiki_get_site_info",
             "wiki_get_history",
             "wiki_get_version",
+            "wiki_upload_asset",
+            "wiki_list_assets",
+            "wiki_create_asset_folder",
+            "wiki_rename_asset",
+            "wiki_delete_asset",
         ]
         assert set(tool_names) == set(expected_names)
 
@@ -165,9 +170,9 @@ class TestWikiJSMCPServer:
         assert "Test Page" in get_tool_response_text(result)
         assert "Test content" in get_tool_response_text(result)
 
-        # Verify default locale and options were used
+        # Verify default locale (resolved by the client when omitted) and options were used
         mock_client_instance.get_page_by_path.assert_called_once_with(
-            "/test", "en", metadata_only=False, include_render=False
+            "/test", None, metadata_only=False, include_render=False
         )
 
     @patch("wikijs_mcp.server.WikiJSConfig.load_config")
@@ -493,7 +498,7 @@ class TestWikiJSMCPServer:
         # MCP response format check removed
         assert "Successfully created page" in get_tool_response_text(result)
         assert "New Page" in get_tool_response_text(result)
-        mock_client_instance.get_localization_config.assert_awaited_once_with()
+        mock_client_instance.get_localization_config.assert_not_awaited()
         mock_client_instance.create_page.assert_awaited_once_with(
             path="/new",
             title="New Page",
@@ -501,7 +506,7 @@ class TestWikiJSMCPServer:
             description="",
             tags=[],
             editor="markdown",
-            locale="zh",
+            locale=None,
         )
 
     @patch("wikijs_mcp.server.WikiJSConfig.load_config")
@@ -541,7 +546,7 @@ class TestWikiJSMCPServer:
             description="Test description",
             tags=["test", "example"],
             editor="markdown",
-            locale="en",
+            locale=None,
         )
 
     @patch("wikijs_mcp.server.WikiJSConfig.load_config")
@@ -586,10 +591,11 @@ class TestWikiJSMCPServer:
 
     @patch("wikijs_mcp.server.WikiJSConfig.load_config")
     @patch("wikijs_mcp.server.WikiJSClient")
-    async def test_call_tool_create_page_falls_back_when_site_locale_missing(
+    async def test_call_tool_create_page_locale_resolution_is_deferred_to_client(
         self, mock_client_class, mock_load_config, mock_wiki_config
     ):
-        """Test creating a page falls back to English without a site locale."""
+        """Test creating a page without an explicit locale defers resolution to
+        the client (no hard-coded 'en' fallback in the server)."""
         mock_load_config.return_value = mock_wiki_config
         mock_client_instance = AsyncMock()
         mock_client_instance.__aenter__.return_value = mock_client_instance
@@ -614,7 +620,7 @@ class TestWikiJSMCPServer:
             description="",
             tags=[],
             editor="markdown",
-            locale="en",
+            locale=None,
         )
 
     @patch("wikijs_mcp.server.WikiJSConfig.load_config")
@@ -686,6 +692,7 @@ class TestWikiJSMCPServer:
             title="New Title",
             description="New description",
             tags=["updated"],
+            locale=None,
         )
 
     @patch("wikijs_mcp.server.WikiJSConfig.load_config")
@@ -962,7 +969,9 @@ class TestWikiJSMCPServer:
 
         # Verify default locale was used
         mock_client_instance.move_page.assert_called_once_with(
-            page_id=456, destination_path="new/location", destination_locale="en"
+            page_id=456,
+            destination_path="new/location",
+            destination_locale=None,
         )
 
     @patch("wikijs_mcp.server.WikiJSConfig.load_config")
@@ -1059,7 +1068,7 @@ class TestWikiJSMCPServer:
         assert "---" not in response_text
 
         mock_client_instance.get_page_by_path.assert_called_once_with(
-            "/test", "en", metadata_only=True, include_render=False
+            "/test", None, metadata_only=True, include_render=False
         )
 
     @patch("wikijs_mcp.server.WikiJSConfig.load_config")
@@ -1185,7 +1194,7 @@ class TestWikiJSMCPServer:
         assert "Tags: dev" in response_text
 
         mock_client_instance.list_pages.assert_called_once_with(
-            50, tags=["dev"], order_by="TITLE", order_by_direction="ASC"
+            50, tags=["dev"], order_by="TITLE", order_by_direction="ASC", locale=None
         )
 
     @patch("wikijs_mcp.server.WikiJSConfig.load_config")
@@ -1209,7 +1218,7 @@ class TestWikiJSMCPServer:
         )
 
         mock_client_instance.list_pages.assert_called_once_with(
-            50, tags=None, order_by="UPDATED", order_by_direction="DESC"
+            50, tags=None, order_by="UPDATED", order_by_direction="DESC", locale=None
         )
 
     @patch("wikijs_mcp.server.WikiJSConfig.load_config")
@@ -1531,6 +1540,221 @@ class TestWikiJSMCPServer:
 
         with pytest.raises(ValueError, match="Invalid config"):
             await server.run_stdio()
+
+    # --- asset tool tests ---
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_upload_asset_success(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test wiki_upload_asset returns the asset path and markdown link."""
+        from mcp.server.fastmcp.exceptions import ToolError  # noqa: F401
+
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.upload_asset.return_value = {
+            "filename": "report.pdf",
+            "mime": "application/pdf",
+            "folderId": 2,
+            "assetPath": "team/manuals/report.pdf",
+            "url": "https://wiki.example.com/team/manuals/report.pdf",
+            "markdownLink": "[report.pdf](https://wiki.example.com/team/manuals/report.pdf)",
+        }
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool(
+            "wiki_upload_asset",
+            {"local_path": "/tmp/report.pdf", "folder_path": "team/manuals"},
+        )
+        response_text = get_tool_response_text(result)
+        assert "Upload successful" in response_text
+        assert "team/manuals/report.pdf" in response_text
+        assert "**Markdown:**" in response_text
+        assert (
+            "[report.pdf](https://wiki.example.com/team/manuals/report.pdf)"
+            in response_text
+        )
+        mock_client_instance.upload_asset.assert_awaited_once_with(
+            0, "/tmp/report.pdf", folder_path="team/manuals"
+        )
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_upload_asset_missing_file(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test wiki_upload_asset with a missing local file."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.upload_asset.side_effect = FileNotFoundError(
+            "/tmp/nope.pdf"
+        )
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool(
+            "wiki_upload_asset", {"local_path": "/tmp/nope.pdf"}
+        )
+        assert "Local file not found" in get_tool_response_text(result)
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_upload_asset_path_conflict(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test wiki_upload_asset rejects folder_path + folder_id."""
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        mock_load_config.return_value = mock_wiki_config
+        server = WikiJSMCPServer()
+
+        with pytest.raises(ToolError, match="Provide either"):
+            await server.app.call_tool(
+                "wiki_upload_asset",
+                {"local_path": "/tmp/a.pdf", "folder_path": "team", "folder_id": 3},
+            )
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_list_assets_success(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test wiki_list_assets resolves a folder path and lists assets."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.asset_folder_id = AsyncMock(return_value=2)
+        mock_client_instance.asset_list.return_value = [
+            {
+                "id": 1,
+                "filename": "manual.pdf",
+                "kind": "BINARY",
+                "mime": "application/pdf",
+                "fileSize": 1024,
+                "folder": {"slug": "manuals"},
+                "createdAt": "2024-01-01",
+            }
+        ]
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool(
+            "wiki_list_assets", {"folder_path": "team/manuals"}
+        )
+        response_text = get_tool_response_text(result)
+        assert "Found 1 asset(s)" in response_text
+        assert "manual.pdf" in response_text
+        assert "BINARY" in response_text
+        mock_client_instance.asset_folder_id.assert_awaited_once_with("team/manuals")
+        mock_client_instance.asset_list.assert_awaited_once_with(2, "ALL")
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_create_asset_folder_success(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test wiki_create_asset_folder resolves the parent and creates."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.asset_folder_id = AsyncMock(return_value=2)
+        mock_client_instance.asset_create_folder.return_value = {
+            "responseResult": {
+                "succeeded": True,
+                "errorCode": 0,
+                "slug": "manuals",
+                "message": "Asset Folder has been created successfully.",
+            }
+        }
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool(
+            "wiki_create_asset_folder", {"slug": "Manuals", "parent_path": "team"}
+        )
+        response_text = get_tool_response_text(result)
+        assert "created successfully" in response_text.lower()
+        assert "Slug:** manuals" in response_text
+        assert "Parent folder id:** 2" in response_text
+        assert "lowercases folder slugs" in response_text
+        mock_client_instance.asset_create_folder.assert_awaited_once_with(
+            2, "Manuals", None
+        )
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_rename_asset_success(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test wiki_rename_asset."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.asset_rename.return_value = {
+            "responseResult": {"succeeded": True, "errorCode": 0}
+        }
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool(
+            "wiki_rename_asset", {"asset_id": 7, "filename": "manual_v2.pdf"}
+        )
+        assert "manual_v2.pdf" in get_tool_response_text(result)
+        mock_client_instance.asset_rename.assert_awaited_once_with(7, "manual_v2.pdf")
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_delete_asset_success(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test wiki_delete_asset."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.asset_delete.return_value = {
+            "responseResult": {"succeeded": True, "errorCode": 0}
+        }
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool("wiki_delete_asset", {"asset_id": 7})
+        assert "Asset ID:** 7" in get_tool_response_text(result)
+        mock_client_instance.asset_delete.assert_awaited_once_with(7)
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_list_assets_no_results(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test wiki_list_assets with no results."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.asset_list.return_value = []
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool("wiki_list_assets", {"folder_id": 5})
+        assert "No assets found" in get_tool_response_text(result)
+        mock_client_instance.asset_list.assert_awaited_once_with(5, "ALL")
 
 
 @pytest.mark.integration

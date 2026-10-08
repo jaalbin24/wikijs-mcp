@@ -34,8 +34,11 @@ class WikiJSMCPServer:
                 "- Use metadata_only=True on wiki_get_page to fetch page info without content, "
                 "saving context tokens during exploration.\n"
                 "- Use wiki_list_tags to discover available tags, then filter wiki_list_pages by tag.\n"
-                "- When creating a page without an explicit locale, the site's configured default "
-                "locale is used automatically."
+                "- When creating a page without an explicit locale, the locale is resolved in this\n"
+                "  order: WIKIJS_DEFAULT_LOCALE, the site's primary locale, then 'de'.\n"
+                "- Use the asset tools (wiki_upload_asset, wiki_list_assets, wiki_create_asset_folder,\n"
+                "  wiki_rename_asset, wiki_delete_asset) to manage files. Uploads require the\n"
+                "  write:assets permission; folders are created on demand and wiki slugs are lowercased.\n"
             ),
         )
         self._setup_tools()
@@ -44,17 +47,21 @@ class WikiJSMCPServer:
         """Setup MCP tools."""
 
         @self.app.tool(
-            description="Full-text search across all wiki pages. Returns matching page titles, paths, and descriptions. Use this when you know keywords but not the page location."
+            description="Full-text search across all wiki pages. Returns matching page titles, paths, and descriptions. Use this when you know keywords but not the page location. When locale is omitted, the resolved default locale (WIKIJS_DEFAULT_LOCALE, then the site's primary locale, then 'de') is used."
         )
-        async def wiki_search(query: str, limit: int = 10) -> str:
+        async def wiki_search(
+            query: str, limit: int = 10, locale: str | None = None
+        ) -> str:
             """Search for pages in Wiki.js.
 
             Args:
                 query: Search query for finding pages
                 limit: Maximum number of results (default: 10)
+                locale: Page locale to search in. Uses the wiki's resolved
+                    default locale when omitted.
             """
             async with WikiJSClient(self.config) as client:
-                results = await client.search_pages(query, limit)
+                results = await client.search_pages(query, limit, locale)
 
                 if not results:
                     return f"No pages found for query: {query}"
@@ -79,7 +86,7 @@ class WikiJSMCPServer:
         async def wiki_get_page(
             path: str | None = None,
             id: int | None = None,
-            locale: str = "en",
+            locale: str | None = None,
             metadata_only: bool = False,
             include_render: bool = False,
         ) -> str:
@@ -88,7 +95,9 @@ class WikiJSMCPServer:
             Args:
                 path: Page path (e.g., 'docs/getting-started'). Use either path OR id, not both.
                 id: Page ID. Use either path OR id, not both.
-                locale: Page locale (default: 'en'). Only used with path.
+                locale: Page locale (only used with path). Uses the wiki's
+                    resolved default locale when omitted (WIKIJS_DEFAULT_LOCALE,
+                    then the site's primary locale, then 'de').
                 metadata_only: If True, skip page content to save context tokens (default: False).
                 include_render: If True, include rendered HTML output (default: False).
             """
@@ -149,13 +158,14 @@ class WikiJSMCPServer:
                 return response
 
         @self.app.tool(
-            description="List wiki pages with optional tag filtering and sort order. Returns page metadata (including tags and content type) without content. Use this to discover what pages exist. Supports filtering by tags (AND logic) and ordering by CREATED, ID, PATH, TITLE, or UPDATED."
+            description="List wiki pages with optional tag filtering, sort order and locale filter. Returns page metadata (including tags and content type) without content. Use this to discover what pages exist. Supports filtering by tags (AND logic) and ordering by CREATED, ID, PATH, TITLE, or UPDATED. When locale is omitted, pages from all locales are listed."
         )
         async def wiki_list_pages(
             limit: int = 50,
             tags: list[str] | None = None,
             order_by: str = "TITLE",
             order_by_direction: str = "ASC",
+            locale: str | None = None,
         ) -> str:
             """List wiki pages with optional filtering and ordering.
 
@@ -164,6 +174,8 @@ class WikiJSMCPServer:
                 tags: Filter by tags — only pages with ALL specified tags are returned (optional)
                 order_by: Sort field — CREATED, ID, PATH, TITLE, or UPDATED (default: TITLE)
                 order_by_direction: Sort direction — ASC or DESC (default: ASC)
+                locale: Only list pages in this locale (optional). When omitted,
+                    all locales are listed.
             """
             valid_order_by = {"CREATED", "ID", "PATH", "TITLE", "UPDATED"}
             if order_by not in valid_order_by:
@@ -182,12 +194,15 @@ class WikiJSMCPServer:
                     tags=tags,
                     order_by=order_by,
                     order_by_direction=order_by_direction,
+                    locale=locale,
                 )
 
                 if not pages:
                     return "No pages found"
 
                 response = f"Found {len(pages)} pages (limit: {limit}):\n\n"
+                if locale is not None:
+                    response += f"Filtered by locale: {locale}\n\n"
                 for page in pages:
                     response += f"**{page['title']}**\n"
                     response += f"Path: {page['path']} (ID: {page['id']})\n"
@@ -237,7 +252,7 @@ class WikiJSMCPServer:
                 return response
 
         @self.app.tool(
-            description="Create a new wiki page at the specified path. Content should match the wiki's editor format (usually markdown). When locale is omitted, the site's configured default locale is used automatically. The page path determines its location in the wiki hierarchy (e.g., 'team/onboarding' creates under 'team')."
+            description="Create a new wiki page at the specified path. Content should match the wiki's editor format (usually markdown). When locale is omitted, it is resolved in this order: WIKIJS_DEFAULT_LOCALE, the site's primary locale, then 'de' — pages are NOT forced to English. The page path determines its location in the wiki hierarchy (e.g., 'team/onboarding' creates under 'team')."
         )
         async def wiki_create_page(
             path: str,
@@ -257,16 +272,13 @@ class WikiJSMCPServer:
                 description: Page description (optional)
                 tags: Page tags (optional)
                 editor: Page editor format (default: 'markdown')
-                locale: Page locale. Uses the site's configured default when omitted.
+                locale: Page locale. Resolved as WIKIJS_DEFAULT_LOCALE, then the
+                    site's primary locale, then 'de' when omitted.
             """
             if tags is None:
                 tags = []
 
             async with WikiJSClient(self.config) as client:
-                if locale is None:
-                    localization = await client.get_localization_config()
-                    locale = localization.get("locale") or "en"
-
                 result = await client.create_page(
                     path=path,
                     title=title,
@@ -295,6 +307,7 @@ class WikiJSMCPServer:
             title: str | None = None,
             description: str | None = None,
             tags: list[str] | None = None,
+            locale: str | None = None,
         ) -> str:
             """Update an existing wiki page.
 
@@ -314,6 +327,8 @@ class WikiJSMCPServer:
                 title: New page title (optional)
                 description: New page description (optional)
                 tags: New page tags (optional)
+                locale: Target locale for the page. When omitted, the page's
+                    current locale is preserved.
             """
             if content is not None and edits is not None:
                 raise ValueError(
@@ -356,6 +371,7 @@ class WikiJSMCPServer:
                     title=title,
                     description=description,
                     tags=tags,
+                    locale=locale,
                 )
 
                 page_info = result.get("page", {})
@@ -398,17 +414,228 @@ class WikiJSMCPServer:
                 return response
 
         @self.app.tool(
-            description="Move a wiki page to a new path and/or locale. The page retains its numeric ID. Use this to reorganize the wiki hierarchy."
+            description="Upload a local file to the wiki asset manager (Wiki.js multipart POST /u). Returns the sanitized filename, asset path, public URL and a ready-to-paste markdown link. Missing folders in folder_path are created on demand. Requires the write:assets permission."
+        )
+        async def wiki_upload_asset(
+            local_path: str,
+            folder_path: str | None = None,
+            folder_id: int | None = None,
+        ) -> str:
+            """Upload a local file as a wiki asset.
+
+            Args:
+                local_path: Local path of the file to upload (e.g. '/tmp/report.pdf')
+                folder_path: Slash-separated asset folder path (e.g. 'team/manuals').
+                    Missing folders are created automatically. Wiki.js lowercases
+                    folder slugs. Use either folder_path or folder_id, not both.
+                folder_id: Numeric asset folder ID (0 = root). Ignored when
+                    folder_path is provided.
+            """
+            if not local_path or not str(local_path).strip():
+                raise ValueError("local_path is required.")
+            if folder_path and folder_id not in (None, 0):
+                raise ValueError(
+                    "Provide either 'folder_path' or 'folder_id', not both."
+                )
+
+            async with WikiJSClient(self.config) as client:
+                try:
+                    result = await client.upload_asset(
+                        folder_id or 0, local_path, folder_path=folder_path
+                    )
+                except FileNotFoundError as exc:
+                    return f"❌ Local file not found: {exc}"
+
+                response = "✅ Upload successful:\n\n"
+                response += f"**Filename:** {result['filename']}\n"
+                response += f"**MIME type:** {result['mime']}\n"
+                response += f"**Asset path:** {result['assetPath']}\n"
+                response += f"**URL:** {result['url']}\n"
+                response += f"**Markdown:**\n\n{result['markdownLink']}\n"
+                response += (
+                    "\n**Note:** assets are served with read:assets — anonymous "
+                    "(guest) access returns 403 unless the wiki is public."
+                )
+                return response
+
+        @self.app.tool(
+            description="List assets in the wiki asset manager, optionally filtered by folder and kind (ALL, IMAGE, BINARY). Returns id, filename, type, mime and size. Requires the read:assets permission."
+        )
+        async def wiki_list_assets(
+            folder_path: str | None = None,
+            folder_id: int | None = None,
+            kind: str = "ALL",
+        ) -> str:
+            """List assets in a folder of the wiki asset manager.
+
+            Args:
+                folder_path: Slash-separated asset folder path (e.g. 'team/manuals').
+                    Missing folders are created on demand. Use either
+                    folder_path or folder_id, not both.
+                folder_id: Numeric asset folder ID (0 = root). Ignored when
+                    folder_path is provided.
+                kind: Asset kind filter — ALL, IMAGE or BINARY (default: ALL)
+            """
+            if folder_path and folder_id not in (None, 0):
+                raise ValueError(
+                    "Provide either 'folder_path' or 'folder_id', not both."
+                )
+
+            async with WikiJSClient(self.config) as client:
+                if folder_path:
+                    folder_id = await client.asset_folder_id(folder_path)
+                folder_id = folder_id or 0
+
+                try:
+                    assets = await client.asset_list(folder_id, kind)
+                except Exception as exc:
+                    raise Exception(
+                        f"{exc} (Hint: listing assets requires the read:assets "
+                        f"permission on the API key.)"
+                    ) from exc
+
+                if not assets:
+                    return (
+                        f"No assets found in folder {folder_id or 'root'} "
+                        f"(kind: {kind})."
+                    )
+
+                response = (
+                    f"Found {len(assets)} asset(s) in folder "
+                    f"{folder_id or 'root'} (kind: {kind}):\n\n"
+                )
+                for item in assets:
+                    response += f"**{item.get('filename', '?')}**\n"
+                    response += f"ID: {item.get('id', '?')}\n"
+                    response += f"Kind: {item.get('kind', '?')} · MIME: {item.get('mime', '?')}\n"
+                    response += f"Size: {item.get('fileSize', 0)} bytes\n"
+                    folder = item.get("folder") or {}
+                    if folder.get("slug"):
+                        response += f"Folder: {folder['slug']}\n"
+                    created = item.get("createdAt")
+                    if created:
+                        response += f"Created: {created}\n"
+                    response += "\n"
+
+                return response
+
+        @self.app.tool(
+            description="Create an asset folder below a parent folder (or the root). Note: Wiki.js lowercases folder slugs. Requires the write:assets permission."
+        )
+        async def wiki_create_asset_folder(
+            slug: str,
+            parent_path: str | None = None,
+            parent_id: int = 0,
+            name: str | None = None,
+        ) -> str:
+            """Create a new asset folder.
+
+            Args:
+                slug: Folder slug (lowercased by Wiki.js)
+                parent_path: Slash-separated path of the parent folder
+                    (e.g. 'team/manuals'). Missing parents are created on
+                    demand. Use either parent_path or parent_id, not both.
+                parent_id: Numeric parent folder ID (0 = root, default). Ignored
+                    when parent_path is provided.
+                name: Human-readable folder name (optional, defaults to slug)
+            """
+            if not slug or not str(slug).strip():
+                raise ValueError("slug is required.")
+            if parent_path and parent_id not in (None, 0):
+                raise ValueError(
+                    "Provide either 'parent_path' or 'parent_id', not both."
+                )
+
+            async with WikiJSClient(self.config) as client:
+                parent = parent_id or 0
+                if parent_path:
+                    parent = await client.asset_folder_id(parent_path)
+
+                try:
+                    result = await client.asset_create_folder(parent, slug, name)
+                except Exception as exc:
+                    raise Exception(
+                        f"{exc} (Hint: creating asset folders requires the "
+                        f"write:assets permission on the API key.)"
+                    ) from exc
+
+                response_result = result.get("responseResult", {})
+                message = response_result.get("message") or "Asset folder created"
+                response = f"✅ {message}\n"
+                response += f"**Slug:** {slug.strip().lower()}\n"
+                response += f"**Parent folder id:** {parent}\n"
+                response += (
+                    "**Note:** Wiki.js lowercases folder slugs; this cannot be "
+                    "worked around."
+                )
+                return response
+
+        @self.app.tool(
+            description="Rename an asset by its numeric ID. The new filename must keep the same extension as the original. Requires the manage:assets permission."
+        )
+        async def wiki_rename_asset(asset_id: int, filename: str) -> str:
+            """Rename an asset.
+
+            Args:
+                asset_id: Numeric asset ID (from wiki_list_assets)
+                filename: New filename, including the original extension
+                    (e.g. 'report_2024.pdf')
+            """
+            if not filename or not str(filename).strip():
+                raise ValueError("filename is required.")
+
+            async with WikiJSClient(self.config) as client:
+                try:
+                    result = await client.asset_rename(asset_id, filename)
+                except Exception as exc:
+                    raise Exception(
+                        f"{exc} (Hint: renaming assets requires the manage:assets "
+                        f"permission on the API key, and the new filename must "
+                        f"keep the asset's extension.)"
+                    ) from exc
+
+                response_result = result.get("responseResult", {})
+                message = response_result.get("message") or "Asset renamed"
+                return f"✅ {message}\n**Asset ID:** {asset_id}\n**New filename:** {filename}"
+
+        @self.app.tool(
+            description="Permanently delete an asset by its numeric ID. This action cannot be undone. Requires the manage:assets permission."
+        )
+        async def wiki_delete_asset(asset_id: int) -> str:
+            """Delete an asset.
+
+            Args:
+                asset_id: Numeric asset ID (from wiki_list_assets)
+            """
+            async with WikiJSClient(self.config) as client:
+                try:
+                    result = await client.asset_delete(asset_id)
+                except Exception as exc:
+                    raise Exception(
+                        f"{exc} (Hint: deleting assets requires the manage:assets "
+                        f"permission on the API key.)"
+                    ) from exc
+
+                response_result = result.get("responseResult", {})
+                message = response_result.get("message") or "Asset deleted"
+                return f"✅ {message}\n**Asset ID:** {asset_id}"
+
+        @self.app.tool(
+            description="Move a wiki page to a new path and/or locale. The page retains its numeric ID. After the move, the page is re-read and the path/locale are verified to match the destination; a mismatch (dirty state, e.g. page created in the wrong locale and missing from Git storage) raises a clear error. When destination_locale is omitted, the resolved default locale (WIKIJS_DEFAULT_LOCALE, then the site's primary locale, then 'de') is used."
         )
         async def wiki_move_page(
-            id: int, destination_path: str, destination_locale: str = "en"
+            id: int,
+            destination_path: str,
+            destination_locale: str | None = None,
         ) -> str:
             """Move a wiki page to a new path and/or locale.
 
             Args:
                 id: Page ID to move
                 destination_path: New path for the page (e.g., 'docs/moved-page')
-                destination_locale: New locale for the page (default: 'en')
+                destination_locale: New locale for the page. Resolved as
+                    WIKIJS_DEFAULT_LOCALE, then the site's primary locale, then
+                    'de' when omitted.
             """
             async with WikiJSClient(self.config) as client:
                 # Get the current page info for the response
@@ -419,19 +646,31 @@ class WikiJSMCPServer:
                 current_path = current_page.get("path", "Unknown")
                 current_locale = current_page.get("locale", "Unknown")
 
-                result = await client.move_page(
-                    page_id=id,
-                    destination_path=destination_path,
-                    destination_locale=destination_locale,
-                )
+                try:
+                    result = await client.move_page(
+                        page_id=id,
+                        destination_path=destination_path,
+                        destination_locale=destination_locale,
+                    )
+                except Exception as exc:
+                    raise Exception(
+                        f"{exc}\n"
+                        f"Hint: the page may have been created with the wrong "
+                        f"locale, leaving it missing from Git storage (a later "
+                        f"move/delete then fails with ENOENT). Recreate the page "
+                        f"with the correct locale or pass an explicit "
+                        f"destination_locale."
+                    ) from exc
 
                 response = "✅ Successfully moved page:\n\n"
                 response += f"**Title:** {current_page.get('title', 'Unknown')}\n"
                 response += f"**From:** {current_path} (locale: {current_locale})\n"
                 response += (
-                    f"**To:** {destination_path} (locale: {destination_locale})\n"
+                    f"**To:** {destination_path} (locale: "
+                    f"{destination_locale or 'resolved default'})\n"
                 )
                 response += f"**Page ID:** {id}\n"
+                response += "**Post-move verification:** ✓ path and locale match the destination.\n"
 
                 response_result = result.get("responseResult", {})
                 if response_result.get("message"):
