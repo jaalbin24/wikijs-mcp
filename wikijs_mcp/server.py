@@ -1,14 +1,93 @@
 """WikiJS MCP Server."""
 
+import argparse
 import asyncio
+import json
 import logging
+from collections.abc import Awaitable, Callable
+from typing import Any, Literal
 
-from mcp.server import FastMCP
+from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.transport_security import TransportSecuritySettings
 
+from .auth import AuthorizationError, WikiJSCredentialResolver
 from .client import WikiJSClient
 from .config import WikiJSConfig
 
 logger = logging.getLogger(__name__)
+
+Transport = Literal["stdio", "streamable-http"]
+VALID_TRANSPORTS = ("stdio", "streamable-http")
+READ_ONLY_ERROR = (
+    "Wiki.js read-only mode is enabled. Mutation tools are disabled by "
+    "WIKIJS_READ_ONLY=true."
+)
+Scope = dict[str, Any]
+Receive = Callable[[], Awaitable[dict[str, Any]]]
+Send = Callable[[dict[str, Any]], Awaitable[None]]
+ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
+
+
+class CloudflareAccessMiddleware:
+    """Validate Cloudflare Access before Streamable HTTP reaches MCP."""
+
+    def __init__(self, app: ASGIApp, credential_resolver: WikiJSCredentialResolver):
+        self.app = app
+        self.credential_resolver = credential_resolver
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        assertion = self._header(scope, "cf-access-jwt-assertion")
+        try:
+            api_key = self.credential_resolver.resolve_for_assertion(assertion)
+            scope["wikijs_api_key"] = api_key
+        except AuthorizationError as exc:
+            await self._reject(send, str(exc))
+            return
+
+        await self.app(scope, receive, send)
+
+    @staticmethod
+    def _header(scope: Scope, name: str) -> str | None:
+        target = name.lower().encode("latin-1")
+        for key, value in scope.get("headers", []):
+            if key.lower() == target:
+                return value.decode("latin-1")
+        return None
+
+    @staticmethod
+    async def _reject(send: Send, message: str) -> None:
+        body = json.dumps({"error": message}).encode("utf-8")
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 401,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode("ascii")),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    """Build the command-line parser for the wikijs-mcp command."""
+    parser = argparse.ArgumentParser(
+        prog="wikijs-mcp",
+        description="Wiki.js MCP server with stdio and Streamable HTTP transports.",
+    )
+    parser.add_argument(
+        "--transport",
+        choices=VALID_TRANSPORTS,
+        default="stdio",
+        help="MCP transport to use. Defaults to stdio.",
+    )
+    return parser
 
 
 class WikiJSMCPServer:
@@ -18,6 +97,16 @@ class WikiJSMCPServer:
         self.config = WikiJSConfig.load_config()
         self.app = FastMCP(
             name="wikijs-mcp-server",
+            host=self.config.mcp_host,
+            port=self.config.mcp_port,
+            streamable_http_path=self.config.mcp_path,
+            stateless_http=True,
+            json_response=True,
+            transport_security=TransportSecuritySettings(
+                enable_dns_rebinding_protection=True,
+                allowed_hosts=self.config.mcp_allowed_hosts,
+                allowed_origins=self.config.mcp_allowed_origins,
+            ),
             instructions=(
                 "Wiki.js MCP server — workflow guidance:\n"
                 "- Start by calling wiki_list_pages or wiki_get_tree to orient yourself.\n"
@@ -38,7 +127,49 @@ class WikiJSMCPServer:
                 "locale is used automatically."
             ),
         )
+        self.credential_resolver = WikiJSCredentialResolver(self.config)
         self._setup_tools()
+
+    def _ensure_writable(self) -> None:
+        """Reject mutation tools when read-only mode is enabled."""
+        if self.config.read_only:
+            raise ToolError(READ_ONLY_ERROR)
+
+    def _request_config(self) -> WikiJSConfig:
+        """Return a config with the API key resolved for the current request."""
+        if not self.config.multi_user_auth_enabled:
+            return self.config
+
+        try:
+            request = self.app.get_context().request_context.request
+        except ValueError as exc:
+            raise ToolError(
+                "Request context unavailable while multi-user authentication is enabled."
+            ) from exc
+
+        if request is None:
+            raise ToolError(
+                "Request context unavailable while multi-user authentication is enabled."
+            )
+
+        return self._request_config_for_request(request)
+
+    def _request_config_for_request(self, request) -> WikiJSConfig:
+        """Return a config copy with request-specific Wiki.js credentials."""
+        api_key = getattr(request, "scope", {}).get("wikijs_api_key")
+        if api_key:
+            return self.config.model_copy(update={"api_key": api_key})
+
+        assertion = request.headers.get("cf-access-jwt-assertion")
+        try:
+            api_key = self.credential_resolver.resolve_for_assertion(assertion)
+        except AuthorizationError as exc:
+            raise ToolError(str(exc)) from exc
+        return self.config.model_copy(update={"api_key": api_key})
+
+    def _wiki_client(self) -> WikiJSClient:
+        """Create a request-scoped Wiki.js client."""
+        return WikiJSClient(self._request_config())
 
     def _setup_tools(self):
         """Setup MCP tools."""
@@ -53,7 +184,7 @@ class WikiJSMCPServer:
                 query: Search query for finding pages
                 limit: Maximum number of results (default: 10)
             """
-            async with WikiJSClient(self.config) as client:
+            async with self._wiki_client() as client:
                 results = await client.search_pages(query, limit)
 
                 if not results:
@@ -103,7 +234,7 @@ class WikiJSMCPServer:
                     "Cannot specify both 'path' and 'id' parameters - use only one"
                 )
 
-            async with WikiJSClient(self.config) as client:
+            async with self._wiki_client() as client:
                 if has_path:
                     page = await client.get_page_by_path(
                         path,
@@ -176,7 +307,7 @@ class WikiJSMCPServer:
                     f"Invalid order_by_direction value '{order_by_direction}'. Must be one of: {', '.join(sorted(valid_directions))}"
                 )
 
-            async with WikiJSClient(self.config) as client:
+            async with self._wiki_client() as client:
                 pages = await client.list_pages(
                     limit,
                     tags=tags,
@@ -218,7 +349,7 @@ class WikiJSMCPServer:
                 locale: Page locale (default: 'en')
                 parent_id: Parent page ID (optional)
             """
-            async with WikiJSClient(self.config) as client:
+            async with self._wiki_client() as client:
                 tree = await client.get_page_tree(parent_path, mode, locale, parent_id)
 
                 if not tree:
@@ -259,10 +390,12 @@ class WikiJSMCPServer:
                 editor: Page editor format (default: 'markdown')
                 locale: Page locale. Uses the site's configured default when omitted.
             """
+            self._ensure_writable()
+
             if tags is None:
                 tags = []
 
-            async with WikiJSClient(self.config) as client:
+            async with self._wiki_client() as client:
                 if locale is None:
                     localization = await client.get_localization_config()
                     locale = localization.get("locale") or "en"
@@ -315,6 +448,8 @@ class WikiJSMCPServer:
                 description: New page description (optional)
                 tags: New page tags (optional)
             """
+            self._ensure_writable()
+
             if content is not None and edits is not None:
                 raise ValueError(
                     "Cannot specify both 'content' and 'edits' — use one or the other"
@@ -323,7 +458,7 @@ class WikiJSMCPServer:
             applied_edits = []
 
             if edits is not None:
-                async with WikiJSClient(self.config) as client:
+                async with self._wiki_client() as client:
                     current_page = await client.get_page_by_id(id)
                     if not current_page:
                         return f"Page with ID {id} not found"
@@ -349,7 +484,7 @@ class WikiJSMCPServer:
 
                     content = current_content
 
-            async with WikiJSClient(self.config) as client:
+            async with self._wiki_client() as client:
                 result = await client.update_page(
                     page_id=id,
                     content=content,
@@ -387,7 +522,9 @@ class WikiJSMCPServer:
             Args:
                 id: Page ID to delete
             """
-            async with WikiJSClient(self.config) as client:
+            self._ensure_writable()
+
+            async with self._wiki_client() as client:
                 result = await client.delete_page(page_id=id)
 
                 response = f"✅ Successfully deleted page with ID: {id}\n"
@@ -410,7 +547,9 @@ class WikiJSMCPServer:
                 destination_path: New path for the page (e.g., 'docs/moved-page')
                 destination_locale: New locale for the page (default: 'en')
             """
-            async with WikiJSClient(self.config) as client:
+            self._ensure_writable()
+
+            async with self._wiki_client() as client:
                 # Get the current page info for the response
                 current_page = await client.get_page_by_id(id)
                 if not current_page:
@@ -447,7 +586,7 @@ class WikiJSMCPServer:
 
             Returns all tags used across the wiki with their IDs and timestamps.
             """
-            async with WikiJSClient(self.config) as client:
+            async with self._wiki_client() as client:
                 tags = await client.list_tags()
 
                 if not tags:
@@ -469,7 +608,7 @@ class WikiJSMCPServer:
         )
         async def wiki_get_site_info() -> str:
             """Get site metadata and localization settings."""
-            async with WikiJSClient(self.config) as client:
+            async with self._wiki_client() as client:
                 config = await client.get_site_info()
 
                 if not config:
@@ -511,7 +650,7 @@ class WikiJSMCPServer:
                 offset_page: Page offset for pagination (default: 0)
                 offset_size: Number of entries per page (default: 100)
             """
-            async with WikiJSClient(self.config) as client:
+            async with self._wiki_client() as client:
                 history = await client.get_page_history(
                     page_id, offset_page, offset_size
                 )
@@ -544,7 +683,7 @@ class WikiJSMCPServer:
                 page_id: Page ID
                 version_id: Version ID (from wiki_get_history)
             """
-            async with WikiJSClient(self.config) as client:
+            async with self._wiki_client() as client:
                 version = await client.get_page_version(page_id, version_id)
 
                 if not version:
@@ -578,25 +717,63 @@ class WikiJSMCPServer:
             logger.error(f"Server failed to start: {str(e)}")
             raise
 
+    async def run_streamable_http(self):
+        """Run the MCP server over Streamable HTTP."""
+        try:
+            if self.config.multi_user_auth_enabled:
+                self.config.validate_multi_user_auth_config()
+            else:
+                self.config.validate_config()
+            logger.info(
+                "Starting WikiJS MCP Server for %s over Streamable HTTP at http://%s:%s%s",
+                self.config.url,
+                self.config.mcp_host,
+                self.config.mcp_port,
+                self.config.mcp_path,
+            )
+            if self.config.multi_user_auth_enabled:
+                import uvicorn
+
+                uvicorn_config = uvicorn.Config(
+                    self.streamable_http_app(),
+                    host=self.config.mcp_host,
+                    port=self.config.mcp_port,
+                    log_level="info",
+                )
+                await uvicorn.Server(uvicorn_config).serve()
+            else:
+                await self.app.run_streamable_http_async()
+        except Exception as e:
+            logger.error(f"Server failed to start: {str(e)}")
+            raise
+
+    async def run(self, transport: Transport = "stdio"):
+        """Run the MCP server with the selected transport."""
+        if transport == "stdio":
+            await self.run_stdio()
+        elif transport == "streamable-http":
+            await self.run_streamable_http()
+        else:
+            raise ValueError(
+                f"Invalid transport '{transport}'. Must be one of: {', '.join(VALID_TRANSPORTS)}"
+            )
+
+    def streamable_http_app(self):
+        """Return the SDK-provided Streamable HTTP ASGI app."""
+        app = self.app.streamable_http_app()
+        if self.config.multi_user_auth_enabled:
+            return CloudflareAccessMiddleware(app, self.credential_resolver)
+        return app
+
 
 async def _async_main():
     """Async entry point."""
-    import sys
-
     logging.basicConfig(level=logging.INFO)
 
-    if len(sys.argv) > 1 and sys.argv[1] == "--help":
-        print("WikiJS MCP Server")
-        print("Usage:")
-        print("  wikijs-mcp")
-        print("  wikijs-mcp --help")
-        print("")
-        print("Runs the MCP server over stdio for use with Claude Code")
-        print("and other MCP clients.")
-        return
+    args = build_arg_parser().parse_args()
 
     server = WikiJSMCPServer()
-    await server.run_stdio()
+    await server.run(args.transport)
 
 
 def main():
