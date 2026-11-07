@@ -16,10 +16,9 @@ logger = logging.getLogger(__name__)
 
 # Hard fallback locale used when neither an explicit locale, the
 # WIKIJS_DEFAULT_LOCALE environment variable nor the site's primary locale
-# can be determined. The upstream code hard-coded "en" here, which broke
-# wikis whose primary locale is not English (pages were created in the wrong
-# locale and never reached Git storage).
-FALLBACK_LOCALE = "de"
+# can be determined. Deliberately kept English so pages never silently
+# default to a non-English locale; set WIKIJS_DEFAULT_LOCALE to override.
+FALLBACK_LOCALE = "en"
 
 # MIME types inferred from the file extension (lowercase, without leading dot).
 _MIME_TYPES: dict[str, str] = {
@@ -148,7 +147,7 @@ class WikiJSClient:
            ``WikiJSConfig.default_locale``).
         3. The wiki's primary locale (``localization.config.locale``), queried
            once per client instance and cached afterwards.
-        4. Hard fallback: ``de``.
+        4. Hard fallback: ``en``.
 
         Returns:
             The resolved locale code.

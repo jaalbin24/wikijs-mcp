@@ -60,7 +60,7 @@ def localization_handler(site_locale):
 
 @pytest.mark.unit
 class TestResolveLocale:
-    """_resolve_locale precedence: explicit > env > site locale > fallback 'de'."""
+    """_resolve_locale precedence: explicit > env > site locale > fallback 'en'."""
 
     async def test_explicit_locale_wins(self):
         with patch.dict(os.environ, {"WIKIJS_DEFAULT_LOCALE": "de"}):
@@ -97,9 +97,9 @@ class TestResolveLocale:
         async with make_client(localization_handler("zh")) as client:
             assert await client._resolve_locale() == "zh"
 
-    async def test_fallback_is_de_not_en(self):
+    async def test_fallback_is_en(self):
         async with make_client(localization_handler(None)) as client:
-            assert await client._resolve_locale() == "de"
+            assert await client._resolve_locale() == "en"
 
     async def test_result_cached_per_client_instance(self):
         calls = {"n": 0}
@@ -139,7 +139,7 @@ def move_verification_handler(
     site_locale="de",
     *,
     result_path="docs/new",
-    result_locale="de",
+    result_locale="en",
     result_page=None,
     page_missing=False,
 ):
@@ -267,7 +267,7 @@ class TestMoveVerification:
                                 "single": {
                                     "id": 5,
                                     "path": "docs/new",
-                                    "locale": "de",
+                                    "locale": "en",
                                     "title": "X",
                                 }
                             }
@@ -278,6 +278,5 @@ class TestMoveVerification:
 
         async with make_client(handler) as client:
             await client.move_page(5, "docs/new")
-        # The destination locale sent to the server is resolved (fallback 'de'),
-        # not a hard-coded 'en'.
-        assert captured["variables"]["destinationLocale"] == "de"
+        # The destination locale sent to the server is the resolved fallback.
+        assert captured["variables"]["destinationLocale"] == "en"

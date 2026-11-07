@@ -4,9 +4,9 @@ All notable changes to this project are documented in this file.
 
 ## [1.2.0] - 2026-10-08
 
-Fork release. This release fixes the locale handling (pages are no longer
-forced into English) and adds a complete asset / file-manager tool cluster plus
-post-move verification.
+Fork release. This release fixes the locale handling (English is now only a
+last-resort fallback, not the hard-coded default) and adds a complete asset /
+file-manager tool cluster plus post-move verification.
 
 ### Added
 
@@ -14,7 +14,7 @@ post-move verification.
   1. explicit `locale` argument,
   2. new optional `WIKIJS_DEFAULT_LOCALE` environment variable,
   3. the wiki's primary locale (`localization.config.locale`, cached per client),
-  4. hard fallback `de` (previously a hard-coded `en`).
+  4. hard fallback `en` (used only when nothing else can be determined).
 - **Asset / file manager tools**:
   - `wiki_upload_asset(local_path, folder_path, folder_id)` — multipart upload
     to `POST {URL}/u` (fields `mediaUpload` file + `mediaUpload` JSON
@@ -39,7 +39,8 @@ post-move verification.
 ### Changed
 
 - `create_page` / `move_page` no longer default to `en`: the locale is resolved
-  via `WIKIJS_DEFAULT_LOCALE` → site primary locale → `de`.
+  via `WIKIJS_DEFAULT_LOCALE` → site primary locale, with `en` only as a
+  last-resort fallback.
 - `update_page` preserves the page's current locale on partial updates and only
   resolves the default when the page has no locale.
 - `wiki_create_page` no longer hard-codes `en` as a server-side fallback; the

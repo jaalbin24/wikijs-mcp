@@ -52,15 +52,18 @@ in this order:
 1. The explicit `locale` / `destination_locale` tool argument.
 2. The optional `WIKIJS_DEFAULT_LOCALE` environment variable.
 3. The wiki's primary locale (queried once per client from the instance).
-4. A hard fallback of `de`.
+4. A hard fallback of `en`.
 
-Upstream versions hard-coded `en` as the default, which broke wikis whose
-primary locale is not English: pages were created in the wrong locale, never
-written to Git storage, and later `move`/`delete` failed with
-`ENOENT: stat /data/repo/...md`. Set `WIKIJS_DEFAULT_LOCALE` to the primary
-locale of your wiki (e.g. `de`) to make this deterministic without a round-trip
-to the wiki. `update_page` preserves the page's current locale unless an
-explicit `locale` is passed.
+Pages usually resolve to the locale of your wiki automatically. The `en`
+fallback only applies when neither an explicit `locale`,
+`WIKIJS_DEFAULT_LOCALE` nor the wiki's primary locale can be determined. Set
+`WIKIJS_DEFAULT_LOCALE` to the primary locale of your wiki (e.g. `de`) to make
+the resolution deterministic without a round-trip to the wiki. Earlier
+releases hard-coded `en` even when the wiki's primary locale differed, which
+created pages in the wrong locale; those pages never reached Git storage and
+later `move`/`delete` failed with `ENOENT: stat /data/repo/...md`.
+`update_page` preserves the page's current locale unless an explicit `locale`
+is passed.
 
 ## Asset upload usage
 
