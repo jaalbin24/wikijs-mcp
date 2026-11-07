@@ -1,6 +1,6 @@
 # WikiJS MCP Server
 
-An MCP server that connects MCP clients to your [Wiki.js](https://js.wiki/) instance — search, read, create, update, move, and delete wiki pages through natural language, plus asset management (uploads, folders, files).
+An MCP server that connects MCP clients to your [Wiki.js](https://js.wiki/) instance.
 
 It supports both **local connections over stdio** and **remote connections using the official MCP Streamable HTTP transport**, making it suitable for local MCP clients as well as remotely hosted clients.
 
