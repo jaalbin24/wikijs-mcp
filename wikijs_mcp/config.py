@@ -66,6 +66,9 @@ class WikiJSConfig(BaseModel):
     api_key: str = Field(default="")
     graphql_endpoint: str = Field(default="/graphql")
     debug: bool = Field(default=False)
+    # Optional override for the locale used by default for page operations.
+    # Takes precedence over the site's primary locale. See client._resolve_locale.
+    default_locale: str | None = Field(default=None)
     read_only: bool = Field(default=False)
     mcp_host: str = Field(default="127.0.0.1")
     mcp_port: int = Field(default=8000)
@@ -90,6 +93,7 @@ class WikiJSConfig(BaseModel):
             api_key=os.getenv("WIKIJS_API_KEY", ""),
             graphql_endpoint=os.getenv("WIKIJS_GRAPHQL_ENDPOINT", "/graphql"),
             debug=parse_bool(os.getenv("DEBUG")),
+            default_locale=os.getenv("WIKIJS_DEFAULT_LOCALE") or None,
             read_only=parse_bool(os.getenv("WIKIJS_READ_ONLY")),
             mcp_host=os.getenv("MCP_HOST", "127.0.0.1"),
             mcp_port=int(os.getenv("MCP_PORT", "8000")),

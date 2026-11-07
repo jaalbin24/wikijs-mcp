@@ -430,7 +430,9 @@ class TestCloudflareAccessAuth:
                     "description": "",
                     "tags": [],
                     "editor": "markdown",
-                    "locale": "zh",
+                    # Locale resolution is deferred to the client
+                    # (_resolve_locale), so the server passes None through.
+                    "locale": None,
                 }
             ]
 

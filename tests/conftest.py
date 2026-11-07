@@ -154,6 +154,7 @@ def clean_env():
         "WIKIJS_URL",
         "WIKIJS_API_KEY",
         "WIKIJS_GRAPHQL_ENDPOINT",
+        "WIKIJS_DEFAULT_LOCALE",
         "WIKIJS_READ_ONLY",
         "MCP_HOST",
         "MCP_PORT",
