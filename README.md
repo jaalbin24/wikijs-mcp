@@ -322,7 +322,7 @@ claude mcp add wikijs \
       "env": {
         "WIKIJS_URL": "https://your-wiki.com",
         "WIKIJS_API_KEY": "your-api-key",
-        "WIKIJS_DEFAULT_LOCALE": "de"
+        "WIKIJS_DEFAULT_LOCALE": "en"
       }
     }
   }
